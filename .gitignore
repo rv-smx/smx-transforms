@@ -1,0 +1,8 @@
+# macOS
+*.DS_Store
+
+# Building
+build
+
+# VS Code
+.vscode
