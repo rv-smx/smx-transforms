@@ -4,12 +4,11 @@
 #include <cstdint>
 #include <memory>
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -18,9 +17,9 @@
 /// Induction variable stream, corresponding to a PHI node.
 struct InductionVariableStream {
   struct IVValue {
-    /// True if the value is static.
-    bool IsStatic;
-    /// The static value.
+    /// True if the value is constant.
+    bool IsConstant;
+    /// The constant value (lowest 64-bit).
     std::uint64_t Value;
 
     void print(llvm::raw_ostream &OS) const;
@@ -28,14 +27,18 @@ struct InductionVariableStream {
 
   /// Name.
   llvm::StringRef Name;
+  /// Depth of the loop that this induction variable is located.
+  unsigned LoopDepth;
+  /// True if is a canonical induction variable.
+  bool IsCanonical;
   /// Initial value.
   llvm::Optional<IVValue> InitVal;
   /// Final value.
   llvm::Optional<IVValue> FinalVal;
-  /// True if is a canonical induction variable.
-  bool IsCanonical;
+  /// True if this induction variable is sure to be increasing.
+  bool IsIncreasing;
   /// Opcode of the step instruction.
-  unsigned StepInstOpc;
+  llvm::Optional<unsigned> StepInstOpc;
 
   void print(llvm::raw_ostream &OS) const;
 };
@@ -45,22 +48,22 @@ struct MemoryStream {
   struct AddressFactor {
     /// Dependent stream.
     void *DepStream;
-    /// Type of the dependent stream.
+    /// Kind of the dependent stream.
     enum {
       InductionVariable,
       Memory,
       /// Not a stream, just a LLVM value.
       NotAStream,
-    } DepStreamType;
+    } DepStreamKind;
     /// Stride.
-    std::uint64_t Stride;
+    unsigned Stride;
 
     void print(llvm::raw_ostream &OS) const;
   };
 
   /// Name.
   llvm::StringRef Name;
-  /// Base address.
+  /// Base address, which must be loop invariant.
   llvm::Value *Base;
   /// Address factors.
   llvm::SmallVector<AddressFactor, 4> Factors;
@@ -69,7 +72,7 @@ struct MemoryStream {
   /// Has been written.
   bool Written;
   /// Width of the memory access in bytes.
-  std::uint64_t Width;
+  unsigned Width;
 
   void print(llvm::raw_ostream &OS) const;
 };
@@ -78,8 +81,8 @@ struct MemoryStream {
 struct MemoryOperation {
   /// Opcode of the memory instruction.
   unsigned MemOpc;
-  /// Memory stream, `nullptr` if the memory stream
-  /// is not capable for this operation.
+  /// Memory stream, `nullptr` if this operation
+  // does not access memory stream.
   MemoryStream *MemStream;
 
   void print(llvm::raw_ostream &OS) const;
@@ -91,8 +94,7 @@ struct StreamInfo {
   /// Induction variable streams.
   llvm::SmallVector<std::unique_ptr<InductionVariableStream>, 4> IVs;
   /// Memory streams.
-  llvm::DenseMap<llvm::GetElementPtrInst *, std::unique_ptr<MemoryStream>>
-      MemStreams;
+  llvm::SmallVector<std::unique_ptr<MemoryStream>, 4> MemStreams;
   /// Memory operations.
   llvm::SmallVector<MemoryOperation, 4> MemOps;
 
@@ -104,7 +106,7 @@ class StreamMemoryAnalysis
 public:
   using Result = llvm::SmallVector<StreamInfo, 0>;
 
-  Result run(llvm::Function &F, llvm::FunctionAnalysisManager &FAM);
+  Result run(llvm::Function &F, llvm::FunctionAnalysisManager &FAM) const;
 
 private:
   static llvm::AnalysisKey Key;
@@ -117,7 +119,7 @@ public:
   explicit StreamMemoryAnalysisPrinter(llvm::raw_ostream &OS) : OS(OS) {}
 
   llvm::PreservedAnalyses run(llvm::Function &F,
-                              llvm::FunctionAnalysisManager &FAM);
+                              llvm::FunctionAnalysisManager &FAM) const;
 
 private:
   llvm::raw_ostream &OS;
