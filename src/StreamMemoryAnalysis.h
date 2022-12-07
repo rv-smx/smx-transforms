@@ -10,6 +10,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
@@ -50,21 +51,25 @@ struct MemoryStream {
     void *DepStream;
     /// Kind of the dependent stream.
     enum {
+      /// Induction variable stream.
       InductionVariable,
+      /// Memory stream.
       Memory,
       /// Not a stream, just a LLVM value.
       NotAStream,
     } DepStreamKind;
     /// Stride.
     unsigned Stride;
+    /// Is loop invariant.
+    bool IsInvariant;
 
     void print(llvm::raw_ostream &OS) const;
   };
 
   /// Name.
   llvm::StringRef Name;
-  /// Base address, which must be loop invariant.
-  llvm::Value *Base;
+  /// Result type.
+  llvm::Type *ResultType;
   /// Address factors.
   llvm::SmallVector<AddressFactor, 4> Factors;
   /// Has been read.
@@ -96,7 +101,7 @@ struct StreamInfo {
   /// Memory streams.
   llvm::SmallVector<std::unique_ptr<MemoryStream>, 4> MemStreams;
   /// Memory operations.
-  llvm::SmallVector<MemoryOperation, 4> MemOps;
+  llvm::SmallVector<std::unique_ptr<MemoryOperation>, 4> MemOps;
 
   void print(llvm::raw_ostream &OS) const;
 };
@@ -123,7 +128,7 @@ public:
 
 private:
   llvm::raw_ostream &OS;
-}
+};
 
 void registerStreamMemoryAnalysis(llvm::PassBuilder &PB);
 

@@ -1,6 +1,7 @@
 #include "StreamMemoryAnalysis.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <queue>
 #include <string>
@@ -33,10 +34,10 @@ public:
   void runOnLoop(Loop *L) {
     SI.Loop = L;
     scanIVs(L);
-    scanGEPsAndMemOps(L);
+    scanMemOps(L);
   }
 
-  StreamInfo getStreamInfo() const { return SI; }
+  StreamInfo getStreamInfo() { return std::move(SI); }
 
 private:
   /// Scans for induction variables.
@@ -53,16 +54,14 @@ private:
     }
   }
 
-  /// Scans for GEPs, loads and stores.
-  void scanGEPsAndMemOps(Loop *L) {
+  /// Scans for loads and stores.
+  void scanMemOps(Loop *L) {
     for (auto BB : L->getBlocks()) {
-      for (const auto &I : *BB) {
-        if (auto GEP = dyn_cast<GetElementPtrInst>(I)) {
-          collectGEP(L, GEP);
-        } else if (auto Load = dyn_cast<LoadInst>(I)) {
-          collectLoad(Load);
-        } else if (auto Store = dyn_cast<StoreInst>(I)) {
-          collectStore(Store);
+      for (auto &I : *BB) {
+        if (auto Load = dyn_cast<LoadInst>(&I)) {
+          collectLoad(L, Load);
+        } else if (auto Store = dyn_cast<StoreInst>(&I)) {
+          collectStore(L, Store);
         }
       }
     }
@@ -78,7 +77,7 @@ private:
     auto IVS = std::make_unique<InductionVariableStream>();
     IVS->Name = IV->getName();
     IVS->LoopDepth = L->getLoopDepth();
-    IVS->IsCanonical = L->isCanonical();
+    IVS->IsCanonical = L->isCanonical(SE);
     if (auto Bounds = L->getBounds(SE)) {
       IVS->InitVal = makeIVValue(Bounds->getInitialIVValue());
       IVS->FinalVal = makeIVValue(Bounds->getFinalIVValue());
@@ -98,38 +97,24 @@ private:
     auto It = GEPs.find(GEP);
     if (It != GEPs.end())
       return It->second;
-    // Check if the GEP can be a memory stream.
-    auto Base = GEP->getPointerOperand();
-    bool IsValidStream = !GEP->getResultElementType()->isVectorTy() &&
-                         !L->isLoopInvariant(GEP) && L->isLoopInvariant(Base);
-    // Collect operands.
-    SmallVector<Value *> Indices;
-    if (IsValidStream) {
-      IsValidStream = false;
-      for (const auto &U : GEP->indices()) {
-        auto Index = removeCast(U.get());
-        if (auto PHI = dyn_cast<PHINode>(Index)) {
-          if (IVs.count(PHI))
-            IsValidStream = true;
-        }
-        Indices.push_back(Index);
-      }
-    }
-    // Skip if the GEP is not a valid stream.
-    if (!IsValidStream) {
+    // Skip if is a loop invariant.
+    if (L->isLoopInvariant(GEP)) {
       GEPs.insert({GEP, nullptr});
       return nullptr;
     }
     // Create a new memory stream.
     auto MS = std::make_unique<MemoryStream>();
     MS->Name = GEP->getName();
-    MS->Base = Base;
-    MS->Width = GEP->getResultElementType()->getScalarSizeInBits();
+    MS->ResultType = GEP->getResultElementType();
+    MS->Width = GEP->getResultElementType()->getScalarSizeInBits() / 8;
     GEPs.insert({GEP, MS.get()});
     // Initialize factors.
-    for (auto V : Indices) {
+    auto ElemTy = GEP->getSourceElementType();
+    for (unsigned Idx = 0; Idx < GEP->getNumOperands(); ++Idx) {
+      auto V = removeCast(GEP->getOperand(Idx));
       void *DepStream = V;
-      unsigned DepStreamKind = MemoryStream::AddressFactor::NotAStream;
+      auto DepStreamKind = MemoryStream::AddressFactor::NotAStream;
+      // Handle induction variable stream and memory stream.
       if (auto PHI = dyn_cast<PHINode>(V)) {
         auto It = IVs.find(PHI);
         if (It != IVs.end()) {
@@ -137,12 +122,24 @@ private:
           DepStreamKind = MemoryStream::AddressFactor::InductionVariable;
         }
       } else if (auto Load = dyn_cast<LoadInst>(V)) {
-        if (auto MS = collectLoad(Load)->MemStream) {
+        if (auto MS = collectLoad(L, Load)->MemStream) {
           DepStream = MS;
           DepStreamKind = MemoryStream::AddressFactor::Memory;
         }
       }
-      // TODO: stride
+      // Handle stride.
+      unsigned Stride;
+      if (!Idx) {
+        // Base address, let the stride = 1.
+        Stride = 1;
+      } else {
+        assert(ElemTy && "Invalid GEP element type!");
+        Stride = ElemTy->getScalarSizeInBits() / 8;
+        ElemTy = GetElementPtrInst::getTypeAtIndex(ElemTy, V);
+      }
+      // Update factors.
+      MS->Factors.push_back(
+          {DepStream, DepStreamKind, Stride, L->isLoopInvariant(V)});
     }
     // Update the stream info.
     auto MSPtr = MS.get();
@@ -151,13 +148,40 @@ private:
   }
 
   /// Collects the information of the given load.
-  MemoryOperation *collectLoad(LoadInst *Load) {
-    // TODO
+  MemoryOperation *collectLoad(Loop *L, LoadInst *Load) {
+    // Skip if already collected.
+    auto It = Loads.find(Load);
+    if (It != Loads.end())
+      return It->second;
+    // Create a new memory operation.
+    auto MO = std::make_unique<MemoryOperation>();
+    MO->MemOpc = Load->getOpcode();
+    Loads.insert({Load, MO.get()});
+    // Check the pointer.
+    auto Ptr = removeCast(Load->getPointerOperand());
+    if (auto GEP = dyn_cast<GetElementPtrInst>(Ptr)) {
+      MO->MemStream = collectGEP(L, GEP);
+      if (MO->MemStream)
+        MO->MemStream->Read = true;
+    }
+    // Update the stream info.
+    auto MOPtr = MO.get();
+    SI.MemOps.push_back(std::move(MO));
+    return MOPtr;
   }
 
   /// Collects the information of the given store.
-  void collectStore(StoreInst *Store) {
-    // TODO
+  void collectStore(Loop *L, StoreInst *Store) {
+    auto MO = std::make_unique<MemoryOperation>();
+    MO->MemOpc = Store->getOpcode();
+    // Check the pointer.
+    auto Ptr = removeCast(Store->getPointerOperand());
+    if (auto GEP = dyn_cast<GetElementPtrInst>(Ptr)) {
+      MO->MemStream = collectGEP(L, GEP);
+      if (MO->MemStream)
+        MO->MemStream->Written = true;
+    }
+    SI.MemOps.push_back(std::move(MO));
   }
 
   /// Creates a new `IVValue` by the given LLVM value.
@@ -218,7 +242,8 @@ void printString(raw_ostream &OS, StringRef Str) {
   OS << '"';
 }
 
-template <typename T> void printOptional(raw_ostream &OS, Optional<T> &Opt) {
+template <typename T>
+void printOptional(raw_ostream &OS, const Optional<T> &Opt) {
   if (Opt) {
     Opt->print(OS);
   } else {
@@ -247,50 +272,52 @@ template <typename T> void printPtrArray(raw_ostream &OS, ArrayRef<T> Arr) {
 }
 
 void printLoop(raw_ostream &OS, Loop *Loop) {
-  OS << "{name:";
-  printString(Loop->getName());
-  OS << ",startLoc:";
+  OS << "{\"name\":";
+  printString(OS, Loop->getName());
+  OS << ",\"startLoc\":";
   std::string Loc;
   raw_string_ostream SS(Loc);
   Loop->getStartLoc().print(SS);
   SS.flush();
   printString(OS, Loc);
-  OS << ",parent:";
+  OS << ",\"parent\":";
   if (auto Parent = Loop->getParentLoop()) {
     printString(OS, Parent->getName());
   } else {
     OS << "null";
   }
-  OS << ",parentFunc:";
+  OS << ",\"parentFunc\":";
   printString(OS, Loop->getHeader()->getParent()->getName());
-  OS << ",annotatedParallel:";
+  OS << ",\"annotatedParallel\":";
   printBool(OS, Loop->isAnnotatedParallel());
-  OS << ",depth:" << Loop->getLoopDepth();
-  OS << ",numSubLoops:" << Loop->getSubLoops().size();
-  OS << ",numBlocks:" << Loop->getNumBlocks() << '}';
+  OS << ",\"depth\":" << Loop->getLoopDepth();
+  OS << ",\"numSubLoops\":" << Loop->getSubLoops().size();
+  OS << ",\"numBlocks\":" << Loop->getNumBlocks() << '}';
 }
 
 } // namespace
 
+AnalysisKey StreamMemoryAnalysis::Key;
+
 void InductionVariableStream::IVValue::print(raw_ostream &OS) const {
-  OS << "{constant:";
-  printBool(OS, InitVal->IsConstant);
-  OS << ",value:" << InitVal->Value << '}';
+  OS << "{\"constant\":";
+  printBool(OS, IsConstant);
+  OS << ",\"value\":" << Value << '}';
 }
 
 void InductionVariableStream::print(raw_ostream &OS) const {
-  OS << "{name:";
+  OS << "{\"name\":";
   printString(OS, Name);
-  OS << ",loopDepth:" << LoopDepth;
-  OS << ",canonical:";
+  OS << ",\"loopDepth\":" << LoopDepth;
+  OS << ",\"canonical\":";
   printBool(OS, IsCanonical);
-  OS << ",initVal:";
+  OS << ",\"initVal\":";
   printOptional(OS, InitVal);
-  OS << ",finalVal:";
+  OS << ",\"finalVal\":";
   printOptional(OS, FinalVal);
-  OS << ",increasing:";
+  OS << ",\"increasing\":";
   printBool(OS, IsIncreasing);
-  OS << ",stepInstOpc:";
+  OS << ",\"stepInstOpc\":";
   if (StepInstOpc) {
     printString(OS, Instruction::getOpcodeName(*StepInstOpc));
   } else {
@@ -301,6 +328,7 @@ void InductionVariableStream::print(raw_ostream &OS) const {
 
 void MemoryStream::AddressFactor::print(raw_ostream &OS) const {
   StringRef DepStreamStr, DepStreamKindStr;
+  std::string ValueName;
   switch (DepStreamKind) {
   case InductionVariable:
     DepStreamStr = reinterpret_cast<InductionVariableStream *>(DepStream)->Name;
@@ -310,37 +338,51 @@ void MemoryStream::AddressFactor::print(raw_ostream &OS) const {
     DepStreamStr = reinterpret_cast<MemoryStream *>(DepStream)->Name;
     DepStreamKindStr = "memory";
     break;
-  case NotAStream:
-    DepStreamStr = reinterpret_cast<Value *>(DepStream)->getName();
+  case NotAStream: {
+    auto V = reinterpret_cast<Value *>(DepStream);
+    if (V->hasName()) {
+      DepStreamStr = V->getName();
+    } else {
+      raw_string_ostream SS(ValueName);
+      SS << V;
+      SS.flush();
+      DepStreamStr = ValueName;
+    }
     DepStreamKindStr = "notAStream";
     break;
   }
-  OS << "{depStream:";
+  }
+  OS << "{\"depStream\":";
   printString(OS, DepStreamStr);
-  OS << ",depStreamKind:\"" << DepStreamKindStr;
-  OS << "\",stride:" << Stride << '}';
-}
-
-void MemoryStream::print(raw_ostream &OS) const {
-  OS << "{name:";
-  printString(OS, Name);
-  OS << ",base:";
-  printString(OS, Base->getName());
-  OS << ",factors:";
-  printArray(OS, Factors);
-  OS << ",read:";
-  printBool(OS, Read);
-  OS << ",written:";
-  printBool(OS, Written);
-  OS << ",width:";
-  printBool(OS, Width);
+  OS << ",\"depStreamKind\":\"" << DepStreamKindStr;
+  OS << "\",\"stride\":" << Stride;
+  OS << ",\"invariant\":";
+  printBool(OS, IsInvariant);
   OS << '}';
 }
 
+void MemoryStream::print(raw_ostream &OS) const {
+  OS << "{\"name\":";
+  printString(OS, Name);
+  OS << ",\"resultType\":";
+  std::string ResultTypeStr;
+  raw_string_ostream SS(ResultTypeStr);
+  ResultType->print(SS);
+  SS.flush();
+  printString(OS, ResultTypeStr);
+  OS << ",\"factors\":";
+  printArray(OS, ArrayRef<AddressFactor>(Factors));
+  OS << ",\"read\":";
+  printBool(OS, Read);
+  OS << ",\"written\":";
+  printBool(OS, Written);
+  OS << ",\"width\":" << Width << '}';
+}
+
 void MemoryOperation::print(raw_ostream &OS) const {
-  OS << "{memOpc:";
-  printString(Instruction::getOpcodeName(MemOpc));
-  OS << ",memStream:";
+  OS << "{\"memOpcode\":";
+  printString(OS, Instruction::getOpcodeName(MemOpc));
+  OS << ",\"memStream\":";
   if (MemStream) {
     printString(OS, MemStream->Name);
   } else {
@@ -350,14 +392,14 @@ void MemoryOperation::print(raw_ostream &OS) const {
 }
 
 void StreamInfo::print(raw_ostream &OS) const {
-  OS << "{loop:";
+  OS << "{\"loop\":";
   printLoop(OS, Loop);
-  OS << ",ivs:";
-  printPtrArray(OS, IVs);
-  OS << ",memStreams:";
-  printPtrArray(OS, MemStreams);
-  OS << ",memOps:";
-  printArray(OS, MemOps);
+  OS << ",\"inductionVariableStreams\":";
+  printPtrArray(OS, ArrayRef<std::unique_ptr<InductionVariableStream>>(IVs));
+  OS << ",\"memStreams\":";
+  printPtrArray(OS, ArrayRef<std::unique_ptr<MemoryStream>>(MemStreams));
+  OS << ",\"memOps\":";
+  printPtrArray(OS, ArrayRef<std::unique_ptr<MemoryOperation>>(MemOps));
   OS << '}';
 }
 
@@ -389,7 +431,7 @@ PreservedAnalyses
 StreamMemoryAnalysisPrinter::run(Function &F,
                                  FunctionAnalysisManager &FAM) const {
   auto &SIs = FAM.getResult<StreamMemoryAnalysis>(F);
-  printArray(OS, SIs);
+  printArray(OS, ArrayRef<StreamInfo>(SIs));
   OS << '\n';
   return PreservedAnalyses::all();
 }
@@ -405,6 +447,6 @@ void registerStreamMemoryAnalysis(PassBuilder &PB) {
         return false;
       });
   PB.registerAnalysisRegistrationCallback([](FunctionAnalysisManager &FAM) {
-    FAM.registerPass([] { return StreamMemoryAnalysis(); })
+    FAM.registerPass([] { return StreamMemoryAnalysis(); });
   });
 }
