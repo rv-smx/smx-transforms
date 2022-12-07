@@ -1,3 +1,5 @@
-add_library(SMXPass MODULE
+add_library(SMXTransforms MODULE
+  PassRegistry.cpp
   SMXPass.cpp
+  StreamMemoryAnalysis.cpp
 )
