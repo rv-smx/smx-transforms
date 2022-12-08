@@ -18,6 +18,8 @@
 /// Induction variable stream, corresponding to a PHI node.
 struct InductionVariableStream {
   struct IVValue {
+    /// Name of the value.
+    llvm::StringRef Name;
     /// True if the value is constant.
     bool IsConstant;
     /// The constant value (lowest 64-bit).

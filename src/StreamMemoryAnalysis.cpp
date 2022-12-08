@@ -94,8 +94,7 @@ private:
   /// This method may return `nullptr`.
   MemoryStream *collectGEP(Loop *L, GetElementPtrInst *GEP) {
     // Skip if already collected.
-    auto It = GEPs.find(GEP);
-    if (It != GEPs.end())
+    if (auto It = GEPs.find(GEP); It != GEPs.end())
       return It->second;
     // Skip if is a loop invariant.
     if (L->isLoopInvariant(GEP)) {
@@ -115,9 +114,8 @@ private:
       void *DepStream = V;
       auto DepStreamKind = MemoryStream::AddressFactor::NotAStream;
       // Handle induction variable stream and memory stream.
-      if (auto PHI = dyn_cast<PHINode>(V)) {
-        auto It = IVs.find(PHI);
-        if (It != IVs.end()) {
+      if (auto PHI = dyn_cast<PHINode>(V)) {        
+        if (auto It = IVs.find(PHI); It != IVs.end()) {
           DepStream = It->second;
           DepStreamKind = MemoryStream::AddressFactor::InductionVariable;
         }
@@ -150,8 +148,7 @@ private:
   /// Collects the information of the given load.
   MemoryOperation *collectLoad(Loop *L, LoadInst *Load) {
     // Skip if already collected.
-    auto It = Loads.find(Load);
-    if (It != Loads.end())
+    if (auto It = Loads.find(Load); It != Loads.end())
       return It->second;
     // Create a new memory operation.
     auto MO = std::make_unique<MemoryOperation>();
@@ -187,7 +184,7 @@ private:
   /// Creates a new `IVValue` by the given LLVM value.
   static InductionVariableStream::IVValue makeIVValue(Value &V) {
     auto C = dyn_cast<ConstantInt>(&V);
-    return {!!C, C ? *C->getValue().getRawData() : 0};
+    return {V.getName(), !!C, C ? *C->getValue().getRawData() : 0};
   }
 
   /// Returns the source operand if the given value is a cast,
@@ -300,7 +297,9 @@ void printLoop(raw_ostream &OS, Loop *Loop) {
 AnalysisKey StreamMemoryAnalysis::Key;
 
 void InductionVariableStream::IVValue::print(raw_ostream &OS) const {
-  OS << "{\"constant\":";
+  OS << "{\"name\":";
+  printString(OS, Name);
+  OS << ",\"constant\":";
   printBool(OS, IsConstant);
   OS << ",\"value\":" << Value << '}';
 }
