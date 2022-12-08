@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.13.4)
 project(SMXTransforms)
 
-# LLVM uses C++14.
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 
 # Find LLVM package.
 find_package(LLVM REQUIRED CONFIG)
