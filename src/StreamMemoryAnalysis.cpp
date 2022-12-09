@@ -11,6 +11,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Constant.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -29,7 +30,7 @@ cl::opt<bool>
 /// Scans loops and collects stream information.
 class LoopScanner {
 public:
-  LoopScanner(ScalarEvolution &SE) : SE(SE) {}
+  LoopScanner(ScalarEvolution &SE, const DataLayout &DL) : SE(SE), DL(DL) {}
 
   void runOnLoop(Loop *L) {
     SI.Loop = L;
@@ -110,11 +111,12 @@ private:
     // Initialize factors.
     auto ElemTy = GEP->getSourceElementType();
     for (unsigned Idx = 0; Idx < GEP->getNumOperands(); ++Idx) {
-      auto V = removeCast(GEP->getOperand(Idx));
+      auto Opr = GEP->getOperand(Idx);
+      auto V = removeCast(Opr);
       void *DepStream = V;
       auto DepStreamKind = MemoryStream::AddressFactor::NotAStream;
       // Handle induction variable stream and memory stream.
-      if (auto PHI = dyn_cast<PHINode>(V)) {        
+      if (auto PHI = dyn_cast<PHINode>(V)) {
         if (auto It = IVs.find(PHI); It != IVs.end()) {
           DepStream = It->second;
           DepStreamKind = MemoryStream::AddressFactor::InductionVariable;
@@ -127,13 +129,15 @@ private:
       }
       // Handle stride.
       unsigned Stride;
-      if (!Idx) {
+      if (Idx == 0) {
         // Base address, let the stride = 1.
         Stride = 1;
+      } else if (Idx == 1) {
+        Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
       } else {
+        ElemTy = GetElementPtrInst::getTypeAtIndex(ElemTy, Opr);
         assert(ElemTy && "Invalid GEP element type!");
-        Stride = ElemTy->getScalarSizeInBits() / 8;
-        ElemTy = GetElementPtrInst::getTypeAtIndex(ElemTy, V);
+        Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
       }
       // Update factors.
       MS->Factors.push_back(
@@ -196,6 +200,7 @@ private:
   }
 
   ScalarEvolution &SE;
+  const DataLayout &DL;
   StreamInfo SI;
   DenseMap<PHINode *, InductionVariableStream *> IVs;
   DenseMap<GetElementPtrInst *, MemoryStream *> GEPs;
@@ -407,6 +412,7 @@ StreamMemoryAnalysis::run(Function &F, FunctionAnalysisManager &FAM) const {
   Result Res;
   auto &LI = FAM.getResult<LoopAnalysis>(F);
   auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
+  auto &DL = F.getParent()->getDataLayout();
   std::queue<Loop *> Loops;
   for (auto Loop : LI) {
     Loops.push(Loop);
@@ -414,7 +420,7 @@ StreamMemoryAnalysis::run(Function &F, FunctionAnalysisManager &FAM) const {
   while (!Loops.empty()) {
     auto Loop = Loops.front();
     Loops.pop();
-    LoopScanner Scanner(SE);
+    LoopScanner Scanner(SE, DL);
     Scanner.runOnLoop(Loop);
     Res.push_back(Scanner.getStreamInfo());
     if (AnalyseAllLoops) {
