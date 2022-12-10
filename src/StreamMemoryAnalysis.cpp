@@ -106,7 +106,7 @@ private:
     auto MS = std::make_unique<MemoryStream>();
     MS->Name = GEP->getName();
     MS->ResultType = GEP->getResultElementType();
-    MS->Width = GEP->getResultElementType()->getScalarSizeInBits() / 8;
+    MS->Width = DL.getTypeAllocSize(MS->ResultType).getFixedSize();
     GEPs.insert({GEP, MS.get()});
     // Initialize factors.
     auto ElemTy = GEP->getSourceElementType();
