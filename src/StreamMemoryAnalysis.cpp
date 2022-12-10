@@ -77,7 +77,7 @@ private:
     // Fill the induction variable stream info.
     auto IVS = std::make_unique<InductionVariableStream>();
     IVS->Name = IV->getName();
-    IVS->LoopDepth = L->getLoopDepth();
+    IVS->Loop = L;
     IVS->IsCanonical = L->isCanonical(SE);
     if (auto Bounds = L->getBounds(SE)) {
       IVS->InitVal = makeIVValue(Bounds->getInitialIVValue());
@@ -312,7 +312,9 @@ void InductionVariableStream::IVValue::print(raw_ostream &OS) const {
 void InductionVariableStream::print(raw_ostream &OS) const {
   OS << "{\"name\":";
   printString(OS, Name);
-  OS << ",\"loopDepth\":" << LoopDepth;
+  OS << ",\"loop\":";
+  printString(OS, Loop->getName());
+  OS << ",\"loopDepth\":" << Loop->getLoopDepth();
   OS << ",\"canonical\":";
   printBool(OS, IsCanonical);
   OS << ",\"initVal\":";

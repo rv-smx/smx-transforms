@@ -30,8 +30,8 @@ struct InductionVariableStream {
 
   /// Name.
   llvm::StringRef Name;
-  /// Depth of the loop that this induction variable is located.
-  unsigned LoopDepth;
+  /// The parent loop.
+  llvm::Loop *Loop;
   /// True if is a canonical induction variable.
   bool IsCanonical;
   /// Initial value.
