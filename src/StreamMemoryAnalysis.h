@@ -30,8 +30,11 @@ struct InductionVariableStream {
 
   /// Name.
   llvm::StringRef Name;
-  /// The parent loop.
-  llvm::Loop *Loop;
+  /// The parent induction variable stream,
+  /// `nullptr` if this is the outermost induction variable.
+  InductionVariableStream *Parent;
+  /// Depth of the loop that this induction variable is located.
+  unsigned LoopDepth;
   /// True if is a canonical induction variable.
   bool IsCanonical;
   /// Initial value.
@@ -89,7 +92,7 @@ struct MemoryOperation {
   /// Opcode of the memory instruction.
   unsigned MemOpc;
   /// Memory stream, `nullptr` if this operation
-  // does not access memory stream.
+  /// does not access memory stream.
   MemoryStream *MemStream;
 
   void print(llvm::raw_ostream &OS) const;

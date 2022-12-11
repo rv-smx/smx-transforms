@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <queue>
 #include <string>
+#include <utility>
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -43,14 +44,16 @@ public:
 private:
   /// Scans for induction variables.
   void scanIVs(Loop *L) {
-    std::queue<Loop *> Loops;
-    Loops.push(L);
+    std::queue<std::pair<Loop *, InductionVariableStream *>> Loops;
+    Loops.push({L, nullptr});
     while (!Loops.empty()) {
-      auto Loop = Loops.front();
+      auto [Loop, Parent] = Loops.front();
       Loops.pop();
-      collectIV(Loop);
+      auto IV = collectIV(Loop, Parent);
+      if (!IV)
+        IV = Parent;
       for (auto SubLoop : Loop->getSubLoops()) {
-        Loops.push(SubLoop);
+        Loops.push({SubLoop, IV});
       }
     }
   }
@@ -69,15 +72,16 @@ private:
   }
 
   /// Collects induction variable information of the given loop.
-  void collectIV(Loop *L) {
+  InductionVariableStream *collectIV(Loop *L, InductionVariableStream *Parent) {
     // Make sure there is an induction variable in the loop.
     auto IV = L->getInductionVariable(SE);
     if (!IV)
-      return;
+      return nullptr;
     // Fill the induction variable stream info.
     auto IVS = std::make_unique<InductionVariableStream>();
     IVS->Name = IV->getName();
-    IVS->Loop = L;
+    IVS->Parent = Parent;
+    IVS->LoopDepth = L->getLoopDepth();
     IVS->IsCanonical = L->isCanonical(SE);
     if (auto Bounds = L->getBounds(SE)) {
       IVS->InitVal = makeIVValue(Bounds->getInitialIVValue());
@@ -87,8 +91,10 @@ private:
       IVS->StepInstOpc = Bounds->getStepInst().getOpcode();
     }
     // Update the stream info.
-    IVs.insert({IV, IVS.get()});
+    auto IVSPtr = IVS.get();
+    IVs.insert({IV, IVSPtr});
     SI.IVs.push_back(std::move(IVS));
+    return IVSPtr;
   }
 
   /// Collects the information of the given GEP.
@@ -312,9 +318,13 @@ void InductionVariableStream::IVValue::print(raw_ostream &OS) const {
 void InductionVariableStream::print(raw_ostream &OS) const {
   OS << "{\"name\":";
   printString(OS, Name);
-  OS << ",\"loop\":";
-  printString(OS, Loop->getName());
-  OS << ",\"loopDepth\":" << Loop->getLoopDepth();
+  OS << ",\"parent\":";
+  if (Parent) {
+    printString(OS, Parent->Name);
+  } else {
+    OS << "null";
+  }
+  OS << ",\"loopDepth\":" << LoopDepth;
   OS << ",\"canonical\":";
   printBool(OS, IsCanonical);
   OS << ",\"initVal\":";
