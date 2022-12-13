@@ -10,6 +10,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
@@ -74,7 +75,17 @@ private:
   /// Collects induction variable information of the given loop.
   InductionVariableStream *collectIV(Loop *L, InductionVariableStream *Parent) {
     // Make sure there is an induction variable in the loop.
-    auto IV = L->getInductionVariable(SE);
+    if (!L->isLoopSimplifyForm())
+      return nullptr;
+    PHINode *IV = nullptr;
+    auto Header = L->getHeader();
+    for (auto &PHI : Header->phis()) {
+      InductionDescriptor IndDesc;
+      if (InductionDescriptor::isInductionPHI(&PHI, L, &SE, IndDesc)) {
+        IV = &PHI;
+        break;
+      }
+    }
     if (!IV)
       return nullptr;
     // Fill the induction variable stream info.
