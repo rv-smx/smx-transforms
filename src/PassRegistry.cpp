@@ -1,3 +1,4 @@
+#include "LoopProfiler.h"
 #include "SMXPass.h"
 #include "StreamMemoryAnalysis.h"
 
@@ -10,6 +11,7 @@ PassPluginLibraryInfo getSMXTransformsPluginInfo() {
           [](PassBuilder &PB) {
             registerSMXPass(PB);
             registerStreamMemoryAnalysis(PB);
+            registerLoopProfiler(PB);
           }};
 }
 
