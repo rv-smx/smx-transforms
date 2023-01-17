@@ -1,8 +1,13 @@
 #include "LoopProfiler.h"
 
+#include <cassert>
 #include <string>
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Type.h"
 #include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
@@ -19,25 +24,74 @@ cl::opt<std::string> LoopProfileFuncExit(
     cl::desc("Name of the function to be called when exiting a loop."),
     cl::init("__loop_profile_func_exit"));
 
-} // namespace
-
-PreservedAnalyses LoopProfiler::run(Function &F,
-                                    FunctionAnalysisManager &FAM) const {
+bool runOnFunction(Function &F, FunctionAnalysisManager &FAM) {
+  bool Changed = false;
   auto &LI = FAM.getResult<LoopAnalysis>(F);
 
-  bool Changed = false;
+  for (auto Loop : LI) {
+    auto Preheader = Loop->getLoopPreheader();
+    if (!Preheader)
+      continue;
 
-  // TODO
+    // Insert profile function to preheader.
+    // TODO
+
+    SmallVector<BasicBlock *, 8> ExitBlocks;
+    Loop->getExitBlocks(ExitBlocks);
+
+    // Insert profile function to exit blocks.
+    for (auto BB : ExitBlocks) {
+      // TODO
+    }
+  }
+
+  return Changed;
+}
+
+} // namespace
+
+PreservedAnalyses LoopProfiler::run(Module &M,
+                                    ModuleAnalysisManager &MAM) const {
+  bool Changed = false;
+  auto &Ctx = M.getContext();
+
+  // Insert declarations of profile functions.
+  auto StrTy = PointerType::getUnqual(Type::getInt8Ty(Ctx));
+  auto ProfFuncTy =
+      FunctionType::get(Type::getVoidTy(Ctx), {StrTy, StrTy}, false);
+  auto ProfFuncEnter =
+      M.getOrInsertFunction(LoopProfileFuncEnter.getValue(), ProfFuncTy);
+  auto ProfFuncExit =
+      M.getOrInsertFunction(LoopProfileFuncExit.getValue(), ProfFuncTy);
+
+  // Set attributes for functions and their parameters.
+  auto SetAttr = [](FunctionCallee F) {
+    auto Func = dyn_cast<Function>(F.getCallee());
+    Func->setDoesNotThrow();
+    Func->addParamAttr(0, Attribute::NoCapture);
+    Func->addParamAttr(0, Attribute::ReadOnly);
+    Func->addParamAttr(1, Attribute::NoCapture);
+    Func->addParamAttr(1, Attribute::ReadOnly);
+  };
+  SetAttr(ProfFuncEnter);
+  SetAttr(ProfFuncExit);
+
+  // Run on all functions in the module.
+  auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  for (auto &F : M) {
+    if (!F.isDeclaration() && runOnFunction(F, FAM))
+      Changed = true;
+  }
 
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 
 void registerLoopProfiler(PassBuilder &PB) {
   PB.registerPipelineParsingCallback(
-      [](StringRef Name, FunctionPassManager &FPM,
+      [](StringRef Name, ModulePassManager &MPM,
          ArrayRef<PassBuilder::PipelineElement>) {
         if (Name == "loop-profiler") {
-          FPM.addPass(LoopProfiler());
+          MPM.addPass(LoopProfiler());
           return true;
         }
         return false;
