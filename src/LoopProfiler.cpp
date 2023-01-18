@@ -112,7 +112,7 @@ PreservedAnalyses LoopProfiler::run(Module &M,
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   for (auto &F : M) {
     if (!F.isDeclaration() &&
-        runOnFunction(F, FAM, LoopProfileFuncEnter, LoopProfileFuncExit))
+        runOnFunction(F, FAM, ProfFuncEnter, ProfFuncExit))
       Changed = true;
   }
 
