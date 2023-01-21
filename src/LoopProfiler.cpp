@@ -31,10 +31,6 @@ bool runOnFunction(Function &F, FunctionAnalysisManager &FAM,
                    FunctionCallee FuncEnter, FunctionCallee FuncExit) {
   bool Changed = false;
   auto &LI = FAM.getResult<LoopAnalysis>(F);
-  IRBuilder<> Builder(F.getContext());
-
-  // Insert a global variable that contains the functions name.
-  auto FuncName = Builder.CreateGlobalStringPtr(F.getName());
 
   std::queue<Loop *> Loops;
   for (auto Loop : LI)
@@ -52,17 +48,11 @@ bool runOnFunction(Function &F, FunctionAnalysisManager &FAM,
     if (!Preheader)
       continue;
 
-    // Insert global variables for loop name and debug location.
-    auto LoopName = Builder.CreateGlobalStringPtr(Loop->getName());
-    std::string StartLocStr;
-    raw_string_ostream SS(StartLocStr);
-    Loop->getStartLoc().print(SS);
-    SS.flush();
-    auto StartLoc = Builder.CreateGlobalStringPtr(StartLocStr);
-
     // Insert profile function to preheader.
-    Builder.SetInsertPoint(Preheader->getTerminator());
-    Builder.CreateCall(FuncEnter, {FuncName, LoopName, StartLoc});
+    IRBuilder<> Builder(Preheader->getTerminator());
+    auto EnterCall = Builder.CreateCall(FuncEnter);
+    auto Loc = Loop->getStartLoc();
+    EnterCall->setDebugLoc(Loc);
 
     SmallVector<BasicBlock *, 8> ExitBlocks;
     Loop->getExitBlocks(ExitBlocks);
@@ -70,7 +60,8 @@ bool runOnFunction(Function &F, FunctionAnalysisManager &FAM,
     // Insert profile function to exit blocks.
     for (auto BB : ExitBlocks) {
       Builder.SetInsertPoint(BB->getFirstNonPHI());
-      Builder.CreateCall(FuncExit, {FuncName, LoopName, StartLoc});
+      auto ExitCall = Builder.CreateCall(FuncExit);
+      ExitCall->setDebugLoc(Loc);
     }
 
     // Mark as changed.
@@ -88,25 +79,15 @@ PreservedAnalyses LoopProfiler::run(Module &M,
   auto &Ctx = M.getContext();
 
   // Insert declarations of profile functions.
-  auto StrTy = PointerType::getUnqual(Type::getInt8Ty(Ctx));
-  auto ProfFuncTy =
-      FunctionType::get(Type::getVoidTy(Ctx), {StrTy, StrTy, StrTy}, false);
+  auto ProfFuncTy = FunctionType::get(Type::getVoidTy(Ctx), false);
   auto ProfFuncEnter =
       M.getOrInsertFunction(LoopProfileFuncEnter.getValue(), ProfFuncTy);
   auto ProfFuncExit =
       M.getOrInsertFunction(LoopProfileFuncExit.getValue(), ProfFuncTy);
 
   // Set attributes for functions and their parameters.
-  auto SetAttr = [](FunctionCallee F) {
-    auto Func = dyn_cast<Function>(F.getCallee());
-    Func->setDoesNotThrow();
-    for (int i = 0; i < 3; ++i) {
-      Func->addParamAttr(i, Attribute::NoCapture);
-      Func->addParamAttr(i, Attribute::ReadOnly);
-    }
-  };
-  SetAttr(ProfFuncEnter);
-  SetAttr(ProfFuncExit);
+  dyn_cast<Function>(ProfFuncEnter.getCallee())->setDoesNotThrow();
+  dyn_cast<Function>(ProfFuncExit.getCallee())->setDoesNotThrow();
 
   // Run on all functions in the module.
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
