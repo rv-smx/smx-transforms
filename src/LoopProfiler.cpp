@@ -59,7 +59,11 @@ bool runOnFunction(Function &F, FunctionAnalysisManager &FAM,
 
     // Insert profile function to exit blocks.
     for (auto BB : ExitBlocks) {
-      Builder.SetInsertPoint(BB->getFirstNonPHI());
+      if (auto LandingPad = BB->getLandingPadInst()) {
+        Builder.SetInsertPoint(LandingPad->getNextNode());
+      } else {
+        Builder.SetInsertPoint(BB->getFirstNonPHI());
+      }
       auto ExitCall = Builder.CreateCall(FuncExit);
       ExitCall->setDebugLoc(Loc);
     }
