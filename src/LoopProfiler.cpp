@@ -4,6 +4,7 @@
 #include <queue>
 #include <string>
 
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Attributes.h"
@@ -31,6 +32,7 @@ bool runOnFunction(Function &F, FunctionAnalysisManager &FAM,
                    FunctionCallee FuncEnter, FunctionCallee FuncExit) {
   bool Changed = false;
   auto &LI = FAM.getResult<LoopAnalysis>(F);
+  SmallSet<BasicBlock *, 32> VisitedExits;
 
   std::queue<Loop *> Loops;
   for (auto Loop : LI)
@@ -59,11 +61,15 @@ bool runOnFunction(Function &F, FunctionAnalysisManager &FAM,
 
     // Insert profile function to exit blocks.
     for (auto BB : ExitBlocks) {
+      if (!VisitedExits.insert(BB).second)
+        continue;
+
       if (auto LandingPad = BB->getLandingPadInst()) {
         Builder.SetInsertPoint(LandingPad->getNextNode());
       } else {
         Builder.SetInsertPoint(BB->getFirstNonPHI());
       }
+
       auto ExitCall = Builder.CreateCall(FuncExit);
       ExitCall->setDebugLoc(Loc);
     }
