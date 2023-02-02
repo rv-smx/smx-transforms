@@ -70,7 +70,7 @@ bool runOnFunction(Function &F, FunctionAnalysisManager &FAM,
         Builder.SetInsertPoint(BB->getFirstNonPHI());
       }
 
-      auto ExitCall = Builder.CreateCall(FuncExit);
+      auto ExitCall = Builder.CreateCall(FuncExit, EnterCall);
       ExitCall->setDebugLoc(Loc);
     }
 
@@ -89,15 +89,19 @@ PreservedAnalyses LoopProfiler::run(Module &M,
   auto &Ctx = M.getContext();
 
   // Insert declarations of profile functions.
-  auto ProfFuncTy = FunctionType::get(Type::getVoidTy(Ctx), false);
+  auto VoidPtr = PointerType::getUnqual(Ctx);
+  auto ProfFuncEnterTy = FunctionType::get(VoidPtr, false);
+  auto ProfFuncExitTy = FunctionType::get(Type::getVoidTy(Ctx), VoidPtr, false);
   auto ProfFuncEnter =
-      M.getOrInsertFunction(LoopProfileFuncEnter.getValue(), ProfFuncTy);
+      M.getOrInsertFunction(LoopProfileFuncEnter.getValue(), ProfFuncEnterTy);
   auto ProfFuncExit =
-      M.getOrInsertFunction(LoopProfileFuncExit.getValue(), ProfFuncTy);
+      M.getOrInsertFunction(LoopProfileFuncExit.getValue(), ProfFuncExitTy);
 
   // Set attributes for functions and their parameters.
   dyn_cast<Function>(ProfFuncEnter.getCallee())->setDoesNotThrow();
-  dyn_cast<Function>(ProfFuncExit.getCallee())->setDoesNotThrow();
+  auto ProfFuncExitF = dyn_cast<Function>(ProfFuncExit.getCallee());
+  ProfFuncExitF->setDoesNotThrow();
+  ProfFuncExitF->addParamAttr(0, Attribute::NoCapture);
 
   // Run on all functions in the module.
   auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
