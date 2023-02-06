@@ -33,6 +33,7 @@ void scanLoops(raw_ostream &OS, bool &First, Loop *Current, Loop *Parent) {
       OS << ',';
     printDebugLoc(OS, SubLoops[i]->getStartLoc());
   }
+  OS << "]}";
 
   // Scan for all sub loops.
   for (auto SubLoop : SubLoops)
