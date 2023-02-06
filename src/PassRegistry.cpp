@@ -1,8 +1,8 @@
+#include "llvm/Passes/PassPlugin.h"
+
 #include "LoopProfiler.h"
 #include "SMXPass.h"
 #include "StreamMemoryAnalysis.h"
-
-#include "llvm/Passes/PassPlugin.h"
 
 using namespace llvm;
 
