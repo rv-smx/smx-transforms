@@ -9,7 +9,6 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Constant.h"
@@ -19,6 +18,8 @@
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
+
+#include "Utils.h"
 
 using namespace llvm;
 
@@ -232,35 +233,6 @@ void printBool(raw_ostream &OS, bool Bool) {
   }
 }
 
-void printString(raw_ostream &OS, StringRef Str) {
-  OS << '"';
-  for (auto C : Str) {
-    switch (C) {
-    case '\\':
-      OS << "\\\\";
-      break;
-    case '\t':
-      OS << "\\t";
-      break;
-    case '\n':
-      OS << "\\n";
-      break;
-    case '"':
-      OS << "\\\"";
-      break;
-    default:
-      if (isPrint(C)) {
-        OS << C;
-      } else {
-        OS << "\\u00";
-        OS << hexdigit((C >> 4) & 0xF);
-        OS << hexdigit((C >> 0) & 0xF);
-      }
-    }
-  }
-  OS << '"';
-}
-
 template <typename T>
 void printOptional(raw_ostream &OS, const Optional<T> &Opt) {
   if (Opt) {
@@ -294,11 +266,7 @@ void printLoop(raw_ostream &OS, Loop *Loop) {
   OS << "{\"name\":";
   printString(OS, Loop->getName());
   OS << ",\"startLoc\":";
-  std::string Loc;
-  raw_string_ostream SS(Loc);
-  Loop->getStartLoc().print(SS);
-  SS.flush();
-  printString(OS, Loc);
+  printDebugLoc(OS, Loop->getStartLoc());
   OS << ",\"parent\":";
   if (auto Parent = Loop->getParentLoop()) {
     printString(OS, Parent->getName());
