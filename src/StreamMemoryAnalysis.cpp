@@ -93,7 +93,7 @@ private:
     auto IVS = std::make_unique<InductionVariableStream>();
     IVS->Name = IV->getName();
     IVS->Parent = Parent;
-    IVS->LoopDepth = L->getLoopDepth();
+    IVS->Loop = L;
     IVS->IsCanonical = L->isCanonical(SE);
     if (auto Bounds = L->getBounds(SE)) {
       IVS->InitVal = makeIVValue(Bounds->getInitialIVValue());
@@ -303,7 +303,9 @@ void InductionVariableStream::print(raw_ostream &OS) const {
   } else {
     OS << "null";
   }
-  OS << ",\"loopDepth\":" << LoopDepth;
+  OS << ",\"loopDepth\":" << Loop->getLoopDepth();
+  OS << ",\"loopStartLoc\":";
+  printDebugLoc(OS, Loop->getStartLoc());
   OS << ",\"canonical\":";
   printBool(OS, IsCanonical);
   OS << ",\"initVal\":";

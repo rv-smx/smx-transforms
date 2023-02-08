@@ -33,8 +33,8 @@ struct InductionVariableStream {
   /// The parent induction variable stream,
   /// `nullptr` if this is the outermost induction variable.
   InductionVariableStream *Parent;
-  /// Depth of the loop that this induction variable is located.
-  unsigned LoopDepth;
+  /// The loop that this induction variable is located.
+  llvm::Loop *Loop;
   /// True if is a canonical induction variable.
   bool IsCanonical;
   /// Initial value.
