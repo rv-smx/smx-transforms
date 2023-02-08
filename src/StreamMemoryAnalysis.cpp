@@ -98,8 +98,8 @@ private:
     if (auto Bounds = L->getBounds(SE)) {
       IVS->InitVal = makeIVValue(Bounds->getInitialIVValue());
       IVS->FinalVal = makeIVValue(Bounds->getFinalIVValue());
-      IVS->IsIncreasing =
-          Bounds->getDirection() == Loop::LoopBounds::Direction::Increasing;
+      IVS->IsDirectionKnown =
+          Bounds->getDirection() != Loop::LoopBounds::Direction::Unknown;
       IVS->StepInstOpc = Bounds->getStepInst().getOpcode();
     }
     // Update the stream info.
@@ -312,8 +312,8 @@ void InductionVariableStream::print(raw_ostream &OS) const {
   printOptional(OS, InitVal);
   OS << ",\"finalVal\":";
   printOptional(OS, FinalVal);
-  OS << ",\"increasing\":";
-  printBool(OS, IsIncreasing);
+  OS << ",\"directionKnown\":";
+  printBool(OS, IsDirectionKnown);
   OS << ",\"stepInstOpc\":";
   if (StepInstOpc) {
     printString(OS, Instruction::getOpcodeName(*StepInstOpc));

@@ -41,8 +41,8 @@ struct InductionVariableStream {
   llvm::Optional<IVValue> InitVal;
   /// Final value.
   llvm::Optional<IVValue> FinalVal;
-  /// True if this induction variable is sure to be increasing.
-  bool IsIncreasing;
+  /// True if this induction variable's direction is known.
+  bool IsDirectionKnown;
   /// Opcode of the step instruction.
   llvm::Optional<unsigned> StepInstOpc;
 
