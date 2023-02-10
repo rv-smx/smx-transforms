@@ -32,11 +32,3 @@ void printString(raw_ostream &OS, StringRef Str) {
   }
   OS << '"';
 }
-
-void printDebugLoc(raw_ostream &OS, DebugLoc Loc) {
-  std::string Str;
-  raw_string_ostream SS(Str);
-  Loc.print(SS);
-  SS.flush();
-  printString(OS, Str);
-}
