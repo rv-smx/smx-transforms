@@ -19,10 +19,10 @@ void scanLoops(raw_ostream &OS, bool &First, Loop *Current, Loop *Parent) {
   }
 
   // Print loop tree information.
-  printDebugLoc(OS, Current->getStartLoc());
+  printPrintable(OS, Current->getStartLoc());
   OS << ":{\"parent\":";
   if (Parent) {
-    printDebugLoc(OS, Parent->getStartLoc());
+    printPrintable(OS, Parent->getStartLoc());
   } else {
     OS << "null";
   }
@@ -31,7 +31,7 @@ void scanLoops(raw_ostream &OS, bool &First, Loop *Current, Loop *Parent) {
   for (std::size_t i = 0; i < SubLoops.size(); ++i) {
     if (i)
       OS << ',';
-    printDebugLoc(OS, SubLoops[i]->getStartLoc());
+    printPrintable(OS, SubLoops[i]->getStartLoc());
   }
   OS << "]}";
 
