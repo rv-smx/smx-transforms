@@ -10,7 +10,6 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Analysis/IVDescriptors.h"
-#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Instructions.h"
@@ -79,9 +78,9 @@ private:
     if (!L->isLoopSimplifyForm())
       return nullptr;
     PHINode *IV = nullptr;
+    InductionDescriptor IndDesc;
     auto Header = L->getHeader();
     for (auto &PHI : Header->phis()) {
-      InductionDescriptor IndDesc;
       if (InductionDescriptor::isInductionPHI(&PHI, L, &SE, IndDesc)) {
         IV = &PHI;
         break;
@@ -95,13 +94,11 @@ private:
     IVS->Parent = Parent;
     IVS->Loop = L;
     IVS->IsCanonical = L->isCanonical(SE);
-    if (auto Bounds = L->getBounds(SE)) {
-      IVS->InitVal = makeIVValue(Bounds->getInitialIVValue());
-      IVS->FinalVal = makeIVValue(Bounds->getFinalIVValue());
-      IVS->IsDirectionKnown =
-          Bounds->getDirection() != Loop::LoopBounds::Direction::Unknown;
-      IVS->StepInstOpc = Bounds->getStepInst().getOpcode();
-    }
+    // Fill value info.
+    IVS->InitVal = IndDesc.getStartValue();
+    IVS->StepVal = IndDesc.getStep();
+    auto StepInst = IV->getIncomingValueForBlock(L->getLoopLatch());
+    IVS->FinalVal = findFinalValue(L, IV, StepInst);
     // Update the stream info.
     auto IVSPtr = IVS.get();
     IVs.insert({IV, IVSPtr});
@@ -203,10 +200,25 @@ private:
     SI.MemOps.push_back(std::move(MO));
   }
 
-  /// Creates a new `IVValue` by the given LLVM value.
-  static InductionVariableStream::IVValue makeIVValue(Value &V) {
-    auto C = dyn_cast<ConstantInt>(&V);
-    return {V.getName(), !!C, C ? *C->getValue().getRawData() : 0};
+  /// Returns the final value of the loop induction variable if found.
+  static Optional<InductionVariableStream::FinalValue>
+  findFinalValue(Loop *L, PHINode *IV, Value *StepInst) {
+    auto LatchCmpInst = L->getLatchCmpInst();
+    if (!LatchCmpInst)
+      return None;
+
+    auto Op0 = LatchCmpInst->getOperand(0);
+    auto Op1 = LatchCmpInst->getOperand(1);
+    Value *V = nullptr;
+    if (Op0 == IV || Op0 == StepInst)
+      V = Op1;
+    if (Op1 == IV || Op1 == StepInst)
+      V = Op0;
+    if (!V)
+      return None;
+
+    return InductionVariableStream::FinalValue{V, L->isLoopInvariant(V),
+                                               LatchCmpInst->getPredicate()};
   }
 
   /// Returns the source operand if the given value is a cast,
@@ -266,7 +278,7 @@ void printLoop(raw_ostream &OS, Loop *Loop) {
   OS << "{\"name\":";
   printString(OS, Loop->getName());
   OS << ",\"startLoc\":";
-  printDebugLoc(OS, Loop->getStartLoc());
+  printPrintable(OS, Loop->getStartLoc());
   OS << ",\"parent\":";
   if (auto Parent = Loop->getParentLoop()) {
     printString(OS, Parent->getName());
@@ -282,16 +294,30 @@ void printLoop(raw_ostream &OS, Loop *Loop) {
   OS << ",\"numBlocks\":" << Loop->getNumBlocks() << '}';
 }
 
+void printValue(raw_ostream &OS, Value *Value) {
+  if (Value->hasName()) {
+    printString(OS, Value->getName());
+  } else {
+    std::string Name;
+    raw_string_ostream SS(Name);
+    SS << Value;
+    SS.flush();
+    printString(OS, Name);
+  }
+}
+
 } // namespace
 
 AnalysisKey StreamMemoryAnalysis::Key;
 
-void InductionVariableStream::IVValue::print(raw_ostream &OS) const {
-  OS << "{\"name\":";
-  printString(OS, Name);
-  OS << ",\"constant\":";
-  printBool(OS, IsConstant);
-  OS << ",\"value\":" << Value << '}';
+void InductionVariableStream::FinalValue::print(raw_ostream &OS) const {
+  OS << "{\"value\":";
+  printValue(OS, Value);
+  OS << ",\"invariant\":";
+  printBool(OS, IsInvariant);
+  OS << ",\"cond\":";
+  printString(OS, CmpInst::getPredicateName(Cond));
+  OS << '}';
 }
 
 void InductionVariableStream::print(raw_ostream &OS) const {
@@ -305,52 +331,37 @@ void InductionVariableStream::print(raw_ostream &OS) const {
   }
   OS << ",\"loopDepth\":" << Loop->getLoopDepth();
   OS << ",\"loopStartLoc\":";
-  printDebugLoc(OS, Loop->getStartLoc());
+  printPrintable(OS, Loop->getStartLoc());
   OS << ",\"canonical\":";
   printBool(OS, IsCanonical);
   OS << ",\"initVal\":";
-  printOptional(OS, InitVal);
+  printValue(OS, InitVal);
+  OS << ",\"stepVal\":";
+  printPrintable(OS, *StepVal);
   OS << ",\"finalVal\":";
   printOptional(OS, FinalVal);
-  OS << ",\"directionKnown\":";
-  printBool(OS, IsDirectionKnown);
-  OS << ",\"stepInstOpc\":";
-  if (StepInstOpc) {
-    printString(OS, Instruction::getOpcodeName(*StepInstOpc));
-  } else {
-    OS << "null";
-  }
   OS << '}';
 }
 
 void MemoryStream::AddressFactor::print(raw_ostream &OS) const {
-  StringRef DepStreamStr, DepStreamKindStr;
-  std::string ValueName;
+  StringRef DepStreamKindStr;
+  OS << "{\"depStream\":";
   switch (DepStreamKind) {
   case InductionVariable:
-    DepStreamStr = reinterpret_cast<InductionVariableStream *>(DepStream)->Name;
+    printString(OS,
+                reinterpret_cast<InductionVariableStream *>(DepStream)->Name);
     DepStreamKindStr = "inductionVariable";
     break;
   case Memory:
-    DepStreamStr = reinterpret_cast<MemoryStream *>(DepStream)->Name;
+    printString(OS, reinterpret_cast<MemoryStream *>(DepStream)->Name);
     DepStreamKindStr = "memory";
     break;
   case NotAStream: {
-    auto V = reinterpret_cast<Value *>(DepStream);
-    if (V->hasName()) {
-      DepStreamStr = V->getName();
-    } else {
-      raw_string_ostream SS(ValueName);
-      SS << V;
-      SS.flush();
-      DepStreamStr = ValueName;
-    }
+    printValue(OS, reinterpret_cast<Value *>(DepStream));
     DepStreamKindStr = "notAStream";
     break;
   }
   }
-  OS << "{\"depStream\":";
-  printString(OS, DepStreamStr);
   OS << ",\"depStreamKind\":\"" << DepStreamKindStr;
   OS << "\",\"stride\":" << Stride;
   OS << ",\"invariant\":";
@@ -362,11 +373,7 @@ void MemoryStream::print(raw_ostream &OS) const {
   OS << "{\"name\":";
   printString(OS, Name);
   OS << ",\"resultType\":";
-  std::string ResultTypeStr;
-  raw_string_ostream SS(ResultTypeStr);
-  ResultType->print(SS);
-  SS.flush();
-  printString(OS, ResultTypeStr);
+  printPrintable(OS, *ResultType);
   OS << ",\"factors\":";
   printArray(OS, ArrayRef<AddressFactor>(Factors));
   OS << ",\"read\":";

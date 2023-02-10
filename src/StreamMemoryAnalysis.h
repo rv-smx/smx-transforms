@@ -8,7 +8,9 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
@@ -17,13 +19,13 @@
 
 /// Induction variable stream, corresponding to a PHI node.
 struct InductionVariableStream {
-  struct IVValue {
-    /// Name of the value.
-    llvm::StringRef Name;
-    /// True if the value is constant.
-    bool IsConstant;
-    /// The constant value (lowest 64-bit).
-    std::uint64_t Value;
+  struct FinalValue {
+    /// The corresponding LLVM value.
+    llvm::Value *Value;
+    /// True if the value is loop invariant.
+    bool IsInvariant;
+    /// Condition for loop exit.
+    llvm::CmpInst::Predicate Cond;
 
     void print(llvm::raw_ostream &OS) const;
   };
@@ -38,13 +40,11 @@ struct InductionVariableStream {
   /// True if is a canonical induction variable.
   bool IsCanonical;
   /// Initial value.
-  llvm::Optional<IVValue> InitVal;
+  llvm::Value *InitVal;
+  /// Step value.
+  const llvm::SCEV *StepVal;
   /// Final value.
-  llvm::Optional<IVValue> FinalVal;
-  /// True if this induction variable's direction is known.
-  bool IsDirectionKnown;
-  /// Opcode of the step instruction.
-  llvm::Optional<unsigned> StepInstOpc;
+  llvm::Optional<FinalValue> FinalVal;
 
   void print(llvm::raw_ostream &OS) const;
 };
