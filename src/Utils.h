@@ -10,14 +10,19 @@
 /// Prints string to the given output stream.
 void printString(llvm::raw_ostream &OS, llvm::StringRef Str);
 
-/// Prints object with `print` method to the given output stream.
-template <typename T>
-inline void printPrintable(llvm::raw_ostream &OS, const T &Obj) {
+/// Converts object with `print` method to a string.
+template <typename T> inline std::string convPrintableToStr(const T &Obj) {
   std::string Str;
   llvm::raw_string_ostream SS(Str);
   Obj.print(SS);
   SS.flush();
-  printString(OS, Str);
+  return Str;
+}
+
+/// Prints object with `print` method to the given output stream.
+template <typename T>
+inline void printPrintable(llvm::raw_ostream &OS, const T &Obj) {
+  printString(OS, convPrintableToStr(Obj));
 }
 
 #endif // SMX_TRANSFORMS_UTILS_H
