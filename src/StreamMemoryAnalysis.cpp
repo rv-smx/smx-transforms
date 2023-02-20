@@ -12,7 +12,6 @@
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -177,6 +176,7 @@ private:
     auto Opr = GEP->getOperand(Idx);
     auto V = removeCast(Opr);
     void *DepStream = V;
+    BinaryOperator *SumInst = nullptr;
     auto DepStreamKind = MemoryStream::AddressFactor::NotAStream;
     // Handle induction variable stream (with/without add) and memory stream.
     bool IsInvariant = L->isLoopInvariant(V);
@@ -193,17 +193,20 @@ private:
     } else if (auto Bin = dyn_cast<BinaryOperator>(V);
                Bin && (Bin->getOpcode() == Instruction::BinaryOps::Add ||
                        Bin->getOpcode() == Instruction::BinaryOps::Sub)) {
-      if (auto [PHI, Other] = checkOperand<PHINode>(Bin); PHI) {
+      if (auto [PHI, Other] = checkSumOperand<PHINode>(Bin); PHI) {
         if (auto It = IVs.find(PHI); It != IVs.end()) {
-          DepStream = Bin;
+          DepStream = It->second;
+          SumInst = Bin;
           DepStreamKind = MemoryStream::AddressFactor::InductionVariableSum;
           IsInvariant = L->isLoopInvariant(Other);
         }
-      } else if (auto [Load, Other] = checkOperand<LoadInst>(Bin);
-                 Load && collectLoad(L, Load)->MemStream) {
-        DepStream = Bin;
-        DepStreamKind = MemoryStream::AddressFactor::MemorySum;
-        IsInvariant = L->isLoopInvariant(Other);
+      } else if (auto [Load, Other] = checkSumOperand<LoadInst>(Bin); Load) {
+        if (auto MS = collectLoad(L, Load)->MemStream) {
+          DepStream = MS;
+          SumInst = Bin;
+          DepStreamKind = MemoryStream::AddressFactor::MemorySum;
+          IsInvariant = L->isLoopInvariant(Other);
+        }
       }
     }
     // Handle stride.
@@ -218,7 +221,7 @@ private:
       assert(ElemTy && "Invalid GEP element type!");
       Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
     }
-    return {DepStream, DepStreamKind, Stride, IsInvariant};
+    return {DepStream, SumInst, DepStreamKind, Stride, IsInvariant};
   }
 
   /// Returns the final value of the loop induction variable if found.
@@ -250,13 +253,15 @@ private:
     return V;
   }
 
-  /// Checks one of the operand of a binary instruction is the given type.
+  /// Checks one of the operand of a add/sub instruction is the given type.
   template <typename T>
-  static std::pair<T *, Value *> checkOperand(BinaryOperator *Bin) {
-    if (auto One = dyn_cast<T>(removeCast(Bin->getOperand(0))))
+  static std::pair<T *, Value *> checkSumOperand(BinaryOperator *Bin) {
+    if (auto One = dyn_cast<T>(removeCast(Bin->getOperand(0)))) {
       return {One, Bin->getOperand(1)};
-    else if (auto One = dyn_cast<T>(removeCast(Bin->getOperand(1))))
+    } else if (auto One = dyn_cast<T>(removeCast(Bin->getOperand(1)));
+               One && Bin->getOpcode() == Instruction::BinaryOps::Add) {
       return {One, Bin->getOperand(0)};
+    }
     return {nullptr, nullptr};
   }
 
@@ -379,28 +384,28 @@ void MemoryStream::AddressFactor::print(raw_ostream &OS) const {
   OS << "{\"depStream\":";
   switch (DepStreamKind) {
   case InductionVariable:
+  case InductionVariableSum:
     printString(OS,
                 reinterpret_cast<InductionVariableStream *>(DepStream)->Name);
-    DepStreamKindStr = "inductionVariable";
+    DepStreamKindStr = DepStreamKind == InductionVariable
+                           ? "inductionVariable"
+                           : "inductionVariableSum";
     break;
   case Memory:
+  case MemorySum:
     printString(OS, reinterpret_cast<MemoryStream *>(DepStream)->Name);
-    DepStreamKindStr = "memory";
+    DepStreamKindStr = DepStreamKind == Memory ? "memory" : "memorySum";
     break;
-  default:
+  case NotAStream:
     printValue(OS, reinterpret_cast<Value *>(DepStream));
-    switch (DepStreamKind) {
-    case InductionVariableSum:
-      DepStreamKindStr = "inductionVariableSum";
-      break;
-    case MemorySum:
-      DepStreamKindStr = "memorySum";
-      break;
-    default:
-      DepStreamKindStr = "notAStream";
-      break;
-    }
+    DepStreamKindStr = "notAStream";
     break;
+  }
+  OS << ",\"sumInst\":";
+  if (SumInst) {
+    printValue(OS, SumInst);
+  } else {
+    OS << "null";
   }
   OS << ",\"depStreamKind\":\"" << DepStreamKindStr;
   OS << "\",\"stride\":" << Stride;

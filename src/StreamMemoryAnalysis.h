@@ -54,6 +54,9 @@ struct MemoryStream {
   struct AddressFactor {
     /// Dependent stream.
     void *DepStream;
+    /// Sum instruction, used to hold the add/sub instruction
+    /// when the kind is `*Sum`, otherwise null.
+    llvm::BinaryOperator *SumInst;
     /// Kind of the dependent stream.
     enum {
       /// Induction variable stream.
