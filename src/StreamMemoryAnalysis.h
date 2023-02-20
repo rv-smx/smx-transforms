@@ -60,6 +60,10 @@ struct MemoryStream {
       InductionVariable,
       /// Memory stream.
       Memory,
+      /// Sum of induction variable stream and a value.
+      InductionVariableSum,
+      /// Sum of memory stream and a value.
+      MemorySum,
       /// Not a stream, just a LLVM value.
       NotAStream,
     } DepStreamKind;

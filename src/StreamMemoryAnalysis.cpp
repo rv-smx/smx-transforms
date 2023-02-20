@@ -12,6 +12,7 @@
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -126,37 +127,7 @@ private:
     // Initialize factors.
     auto ElemTy = GEP->getSourceElementType();
     for (unsigned Idx = 0; Idx < GEP->getNumOperands(); ++Idx) {
-      auto Opr = GEP->getOperand(Idx);
-      auto V = removeCast(Opr);
-      void *DepStream = V;
-      auto DepStreamKind = MemoryStream::AddressFactor::NotAStream;
-      // Handle induction variable stream and memory stream.
-      if (auto PHI = dyn_cast<PHINode>(V)) {
-        if (auto It = IVs.find(PHI); It != IVs.end()) {
-          DepStream = It->second;
-          DepStreamKind = MemoryStream::AddressFactor::InductionVariable;
-        }
-      } else if (auto Load = dyn_cast<LoadInst>(V)) {
-        if (auto MS = collectLoad(L, Load)->MemStream) {
-          DepStream = MS;
-          DepStreamKind = MemoryStream::AddressFactor::Memory;
-        }
-      }
-      // Handle stride.
-      unsigned Stride;
-      if (Idx == 0) {
-        // Base address, let the stride = 1.
-        Stride = 1;
-      } else if (Idx == 1) {
-        Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
-      } else {
-        ElemTy = GetElementPtrInst::getTypeAtIndex(ElemTy, Opr);
-        assert(ElemTy && "Invalid GEP element type!");
-        Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
-      }
-      // Update factors.
-      MS->Factors.push_back(
-          {DepStream, DepStreamKind, Stride, L->isLoopInvariant(V)});
+      MS->Factors.push_back(collectAddrFactor(L, GEP, ElemTy, Idx));
     }
     // Update the stream info.
     auto MSPtr = MS.get();
@@ -200,6 +171,56 @@ private:
     SI.MemOps.push_back(std::move(MO));
   }
 
+  /// Collects the information of the given address factor.
+  MemoryStream::AddressFactor collectAddrFactor(Loop *L, GetElementPtrInst *GEP,
+                                                Type *&ElemTy, unsigned Idx) {
+    auto Opr = GEP->getOperand(Idx);
+    auto V = removeCast(Opr);
+    void *DepStream = V;
+    auto DepStreamKind = MemoryStream::AddressFactor::NotAStream;
+    // Handle induction variable stream (with/without add) and memory stream.
+    bool IsInvariant = L->isLoopInvariant(V);
+    if (auto PHI = dyn_cast<PHINode>(V)) {
+      if (auto It = IVs.find(PHI); It != IVs.end()) {
+        DepStream = It->second;
+        DepStreamKind = MemoryStream::AddressFactor::InductionVariable;
+      }
+    } else if (auto Load = dyn_cast<LoadInst>(V)) {
+      if (auto MS = collectLoad(L, Load)->MemStream) {
+        DepStream = MS;
+        DepStreamKind = MemoryStream::AddressFactor::Memory;
+      }
+    } else if (auto Bin = dyn_cast<BinaryOperator>(V);
+               Bin && (Bin->getOpcode() == Instruction::BinaryOps::Add ||
+                       Bin->getOpcode() == Instruction::BinaryOps::Sub)) {
+      if (auto [PHI, Other] = checkOperand<PHINode>(Bin); PHI) {
+        if (auto It = IVs.find(PHI); It != IVs.end()) {
+          DepStream = Bin;
+          DepStreamKind = MemoryStream::AddressFactor::InductionVariableSum;
+          IsInvariant = L->isLoopInvariant(Other);
+        }
+      } else if (auto [Load, Other] = checkOperand<LoadInst>(Bin);
+                 Load && collectLoad(L, Load)->MemStream) {
+        DepStream = Bin;
+        DepStreamKind = MemoryStream::AddressFactor::MemorySum;
+        IsInvariant = L->isLoopInvariant(Other);
+      }
+    }
+    // Handle stride.
+    unsigned Stride;
+    if (Idx == 0) {
+      // Base address, let the stride = 1.
+      Stride = 1;
+    } else if (Idx == 1) {
+      Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
+    } else {
+      ElemTy = GetElementPtrInst::getTypeAtIndex(ElemTy, Opr);
+      assert(ElemTy && "Invalid GEP element type!");
+      Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
+    }
+    return {DepStream, DepStreamKind, Stride, IsInvariant};
+  }
+
   /// Returns the final value of the loop induction variable if found.
   static Optional<InductionVariableStream::FinalValue>
   findFinalValue(Loop *L, PHINode *IV, Value *StepInst) {
@@ -227,6 +248,16 @@ private:
     if (auto Cast = dyn_cast<CastInst>(V))
       return removeCast(Cast->getOperand(0));
     return V;
+  }
+
+  /// Checks one of the operand of a binary instruction is the given type.
+  template <typename T>
+  static std::pair<T *, Value *> checkOperand(BinaryOperator *Bin) {
+    if (auto One = dyn_cast<T>(removeCast(Bin->getOperand(0))))
+      return {One, Bin->getOperand(1)};
+    else if (auto One = dyn_cast<T>(removeCast(Bin->getOperand(1))))
+      return {One, Bin->getOperand(0)};
+    return {nullptr, nullptr};
   }
 
   ScalarEvolution &SE;
@@ -356,11 +387,20 @@ void MemoryStream::AddressFactor::print(raw_ostream &OS) const {
     printString(OS, reinterpret_cast<MemoryStream *>(DepStream)->Name);
     DepStreamKindStr = "memory";
     break;
-  case NotAStream: {
+  default:
     printValue(OS, reinterpret_cast<Value *>(DepStream));
-    DepStreamKindStr = "notAStream";
+    switch (DepStreamKind) {
+    case InductionVariableSum:
+      DepStreamKindStr = "inductionVariableSum";
+      break;
+    case MemorySum:
+      DepStreamKindStr = "memorySum";
+      break;
+    default:
+      DepStreamKindStr = "notAStream";
+      break;
+    }
     break;
-  }
   }
   OS << ",\"depStreamKind\":\"" << DepStreamKindStr;
   OS << "\",\"stride\":" << Stride;
