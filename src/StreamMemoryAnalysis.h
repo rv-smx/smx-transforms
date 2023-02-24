@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <variant>
 
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
@@ -51,29 +52,36 @@ struct InductionVariableStream {
 
 /// Memory stream, corresponding to a GEP.
 struct MemoryStream {
-  struct AddressFactor {
-    /// Dependent stream.
-    void *DepStream;
-    /// Sum instruction, used to hold the add/sub instruction
-    /// when the kind is `*Sum`, otherwise null.
-    llvm::BinaryOperator *SumInst;
-    /// Kind of the dependent stream.
+  struct Stride {
+    /// Stride value.
+    std::variant<unsigned, llvm::Value *> Value;
+    /// Operator of the stride.
     enum {
-      /// Induction variable stream.
-      InductionVariable,
-      /// Memory stream.
-      Memory,
-      /// Sum of induction variable stream and a value.
-      InductionVariableSum,
-      /// Sum of memory stream and a value.
-      MemorySum,
-      /// Not a stream, just a LLVM value.
-      NotAStream,
-    } DepStreamKind;
-    /// Stride.
-    unsigned Stride;
+      /// (* stride).
+      Mul,
+      /// (<< stride), or, (* (1 << stride)).
+      Shl,
+      /// (/ stride), signed.
+      SDiv,
+      /// (/ stride), unsigned.
+      UDiv,
+    } Op;
     /// Is loop invariant.
     bool IsInvariant;
+
+    void print(llvm::raw_ostream &OS) const;
+  };
+
+  struct AddressFactor {
+    /// Dependent stream.
+    std::variant<InductionVariableStream *, MemoryStream *, llvm::Value *>
+        DepStream;
+    /// Strides.
+    llvm::SmallVector<Stride, 1> Strides;
+    /// Is loop invariant.
+    bool IsInvariant;
+    /// `true` if (- factor), otherwise (+ stride).
+    bool IsNeg;
 
     void print(llvm::raw_ostream &OS) const;
   };

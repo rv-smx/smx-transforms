@@ -126,7 +126,21 @@ private:
     // Initialize factors.
     auto ElemTy = GEP->getSourceElementType();
     for (unsigned Idx = 0; Idx < GEP->getNumOperands(); ++Idx) {
-      MS->Factors.push_back(collectAddrFactor(L, GEP, ElemTy, Idx));
+      auto Opr = GEP->getOperand(Idx);
+      // Handle stride.
+      unsigned Stride;
+      if (Idx == 0) {
+        // Base address, let the stride = 1.
+        Stride = 1;
+      } else if (Idx == 1) {
+        Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
+      } else {
+        ElemTy = GetElementPtrInst::getTypeAtIndex(ElemTy, Opr);
+        assert(ElemTy && "Invalid GEP element type!");
+        Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
+      }
+      // Update address factors.
+      updateAddrFactors(MS.get(), L, Opr, Stride);
     }
     // Update the stream info.
     auto MSPtr = MS.get();
@@ -170,58 +184,76 @@ private:
     SI.MemOps.push_back(std::move(MO));
   }
 
-  /// Collects the information of the given address factor.
-  MemoryStream::AddressFactor collectAddrFactor(Loop *L, GetElementPtrInst *GEP,
-                                                Type *&ElemTy, unsigned Idx) {
-    auto Opr = GEP->getOperand(Idx);
+  /// Updates address factor information for the given memory stream.
+  void updateAddrFactors(MemoryStream *MS, Loop *L, Value *Opr,
+                         unsigned Stride) {
+    auto Num = collectAddrFactors(MS, L, Opr, false);
+    for (auto Idx = MS->Factors.size() - Num; Idx < MS->Factors.size(); ++Idx) {
+      MS->Factors[Idx].Strides.push_back(
+          {Stride, MemoryStream::Stride::Mul, true});
+    }
+  }
+
+  /// Collects address factors for the given memory stream.
+  /// Returns the number of added address factors.
+  size_t collectAddrFactors(MemoryStream *MS, Loop *L, Value *Opr, bool IsNeg) {
     auto V = removeCast(Opr);
-    void *DepStream = V;
-    BinaryOperator *SumInst = nullptr;
-    auto DepStreamKind = MemoryStream::AddressFactor::NotAStream;
-    // Handle induction variable stream (with/without add) and memory stream.
     bool IsInvariant = L->isLoopInvariant(V);
     if (auto PHI = dyn_cast<PHINode>(V)) {
       if (auto It = IVs.find(PHI); It != IVs.end()) {
-        DepStream = It->second;
-        DepStreamKind = MemoryStream::AddressFactor::InductionVariable;
+        // Induction variable stream.
+        MS->Factors.push_back({It->second, {}, IsInvariant, IsNeg});
+        return 1;
       }
     } else if (auto Load = dyn_cast<LoadInst>(V)) {
-      if (auto MS = collectLoad(L, Load)->MemStream) {
-        DepStream = MS;
-        DepStreamKind = MemoryStream::AddressFactor::Memory;
+      if (auto M = collectLoad(L, Load)->MemStream) {
+        // Memory stream.
+        MS->Factors.push_back({M, {}, IsInvariant, IsNeg});
+        return 1;
       }
-    } else if (auto Bin = dyn_cast<BinaryOperator>(V);
-               Bin && (Bin->getOpcode() == Instruction::BinaryOps::Add ||
-                       Bin->getOpcode() == Instruction::BinaryOps::Sub)) {
-      if (auto [PHI, Other] = checkSumOperand<PHINode>(Bin); PHI) {
-        if (auto It = IVs.find(PHI); It != IVs.end()) {
-          DepStream = It->second;
-          SumInst = Bin;
-          DepStreamKind = MemoryStream::AddressFactor::InductionVariableSum;
-          IsInvariant = L->isLoopInvariant(Other);
+    } else if (auto Bin = dyn_cast<BinaryOperator>(V)) {
+      // Handle add/sub/mul/shl/sdiv/udiv.
+      switch (Bin->getOpcode()) {
+      case Instruction::BinaryOps::Add:
+      case Instruction::BinaryOps::Sub: {
+        bool IsRhsNeg = IsNeg;
+        if (Bin->getOpcode() == Instruction::BinaryOps::Sub)
+          IsRhsNeg = !IsRhsNeg;
+        return collectAddrFactors(MS, L, Bin->getOperand(0), IsNeg) +
+               collectAddrFactors(MS, L, Bin->getOperand(1), IsRhsNeg);
+      }
+      case Instruction::BinaryOps::Mul: {
+        auto [Lhs, Rhs] = getMulOperands(Bin);
+        auto Num = collectAddrFactors(MS, L, Lhs, IsNeg);
+        for (auto Idx = MS->Factors.size() - Num; Idx < MS->Factors.size();
+             ++Idx) {
+          MS->Factors[Idx].Strides.push_back(
+              {Rhs, MemoryStream::Stride::Mul, L->isLoopInvariant(Rhs)});
         }
-      } else if (auto [Load, Other] = checkSumOperand<LoadInst>(Bin); Load) {
-        if (auto MS = collectLoad(L, Load)->MemStream) {
-          DepStream = MS;
-          SumInst = Bin;
-          DepStreamKind = MemoryStream::AddressFactor::MemorySum;
-          IsInvariant = L->isLoopInvariant(Other);
+        return Num;
+      }
+      case Instruction::BinaryOps::Shl:
+      case Instruction::BinaryOps::SDiv:
+      case Instruction::BinaryOps::UDiv: {
+        auto Num = collectAddrFactors(MS, L, Bin->getOperand(0), IsNeg);
+        auto Op = Bin->getOpcode() == Instruction::BinaryOps::Shl
+                      ? MemoryStream::Stride::Shl
+                  : Bin->getOpcode() == Instruction::BinaryOps::SDiv
+                      ? MemoryStream::Stride::SDiv
+                      : MemoryStream::Stride::UDiv;
+        for (auto Idx = MS->Factors.size() - Num; Idx < MS->Factors.size();
+             ++Idx) {
+          MS->Factors[Idx].Strides.push_back(
+              {Bin->getOperand(1), Op, L->isLoopInvariant(Bin->getOperand(1))});
         }
+        return Num;
+      }
+      default:;
       }
     }
-    // Handle stride.
-    unsigned Stride;
-    if (Idx == 0) {
-      // Base address, let the stride = 1.
-      Stride = 1;
-    } else if (Idx == 1) {
-      Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
-    } else {
-      ElemTy = GetElementPtrInst::getTypeAtIndex(ElemTy, Opr);
-      assert(ElemTy && "Invalid GEP element type!");
-      Stride = DL.getTypeAllocSize(ElemTy).getFixedSize();
-    }
-    return {DepStream, SumInst, DepStreamKind, Stride, IsInvariant};
+    // Not a stream.
+    MS->Factors.push_back({V, {}, IsInvariant, IsNeg});
+    return 1;
   }
 
   /// Returns the final value of the loop induction variable if found.
@@ -253,16 +285,17 @@ private:
     return V;
   }
 
-  /// Checks one of the operand of a add/sub instruction is the given type.
-  template <typename T>
-  static std::pair<T *, Value *> checkSumOperand(BinaryOperator *Bin) {
-    if (auto One = dyn_cast<T>(removeCast(Bin->getOperand(0)))) {
-      return {One, Bin->getOperand(1)};
-    } else if (auto One = dyn_cast<T>(removeCast(Bin->getOperand(1)));
-               One && Bin->getOpcode() == Instruction::BinaryOps::Add) {
-      return {One, Bin->getOperand(0)};
-    }
-    return {nullptr, nullptr};
+  /// Checks operands of a multiply instruction and returns them.
+  static std::pair<Value *, Value *> getMulOperands(BinaryOperator *Bin) {
+    auto Lhs = removeCast(Bin->getOperand(0));
+    auto Rhs = removeCast(Bin->getOperand(1));
+    if (isa<PHINode>(Lhs) || isa<LoadInst>(Lhs) ||
+        (isa<BinaryOperator>(Lhs) && !isa<BinaryOperator>(Rhs)))
+      return {Lhs, Rhs};
+    if (isa<PHINode>(Rhs) || isa<LoadInst>(Rhs) ||
+        (isa<BinaryOperator>(Rhs) && !isa<BinaryOperator>(Lhs)))
+      return {Rhs, Lhs};
+    return {Lhs, Rhs};
   }
 
   ScalarEvolution &SE;
@@ -379,38 +412,61 @@ void InductionVariableStream::print(raw_ostream &OS) const {
   OS << '}';
 }
 
+void MemoryStream::Stride::print(raw_ostream &OS) const {
+  StringRef ValueKindStr;
+  OS << "{\"value\":";
+  if (auto ConstInt = std::get_if<unsigned>(&Value)) {
+    OS << *ConstInt;
+    ValueKindStr = "constInt";
+  } else {
+    auto V = std::get_if<::Value *>(&Value);
+    assert(V && "WTF?");
+    printValue(OS, *V);
+    ValueKindStr = "value";
+  }
+  OS << ",\"valueKind\":\"" << ValueKindStr;
+  OS << "\",\"op\":\"";
+  switch (Op) {
+  case Mul:
+    OS << "mul";
+    break;
+  case Shl:
+    OS << "shl";
+    break;
+  case SDiv:
+    OS << "sdiv";
+    break;
+  case UDiv:
+    OS << "udiv";
+    break;
+  }
+  OS << "\",\"invariant\":";
+  printBool(OS, IsInvariant);
+  OS << '}';
+}
+
 void MemoryStream::AddressFactor::print(raw_ostream &OS) const {
   StringRef DepStreamKindStr;
   OS << "{\"depStream\":";
-  switch (DepStreamKind) {
-  case InductionVariable:
-  case InductionVariableSum:
-    printString(OS,
-                reinterpret_cast<InductionVariableStream *>(DepStream)->Name);
-    DepStreamKindStr = DepStreamKind == InductionVariable
-                           ? "inductionVariable"
-                           : "inductionVariableSum";
-    break;
-  case Memory:
-  case MemorySum:
-    printString(OS, reinterpret_cast<MemoryStream *>(DepStream)->Name);
-    DepStreamKindStr = DepStreamKind == Memory ? "memory" : "memorySum";
-    break;
-  case NotAStream:
-    printValue(OS, reinterpret_cast<Value *>(DepStream));
-    DepStreamKindStr = "notAStream";
-    break;
-  }
-  OS << ",\"sumInst\":";
-  if (SumInst) {
-    printValue(OS, SumInst);
+  if (auto IV = std::get_if<InductionVariableStream *>(&DepStream)) {
+    printString(OS, (*IV)->Name);
+    DepStreamKindStr = "inductionVariable";
+  } else if (auto MS = std::get_if<MemoryStream *>(&DepStream)) {
+    printString(OS, (*MS)->Name);
+    DepStreamKindStr = "memory";
   } else {
-    OS << "null";
+    auto V = std::get_if<Value *>(&DepStream);
+    assert(V && "WTF?");
+    printValue(OS, *V);
+    DepStreamKindStr = "notAStream";
   }
   OS << ",\"depStreamKind\":\"" << DepStreamKindStr;
-  OS << "\",\"stride\":" << Stride;
+  OS << "\",\"strides\":";
+  printArray(OS, ArrayRef<Stride>(Strides));
   OS << ",\"invariant\":";
   printBool(OS, IsInvariant);
+  OS << ",\"neg\":";
+  printBool(OS, IsNeg);
   OS << '}';
 }
 
