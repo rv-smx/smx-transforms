@@ -50,7 +50,7 @@ private:
     while (!Loops.empty()) {
       auto [Loop, Parent] = Loops.front();
       Loops.pop();
-      auto IV = collectIV(Loop, Parent);
+      auto IV = collectIV(L, Loop, Parent);
       if (!IV)
         IV = Parent;
       for (auto SubLoop : Loop->getSubLoops()) {
@@ -73,7 +73,8 @@ private:
   }
 
   /// Collects induction variable information of the given loop.
-  InductionVariableStream *collectIV(Loop *L, InductionVariableStream *Parent) {
+  InductionVariableStream *collectIV(Loop *Top, Loop *L,
+                                     InductionVariableStream *Parent) {
     // Make sure there is an induction variable in the loop.
     if (!L->isLoopSimplifyForm())
       return nullptr;
@@ -98,7 +99,7 @@ private:
     IVS->InitVal = IndDesc.getStartValue();
     IVS->StepVal = IndDesc.getStep();
     auto StepInst = IV->getIncomingValueForBlock(L->getLoopLatch());
-    IVS->FinalVal = findFinalValue(L, IV, StepInst);
+    IVS->FinalVal = findFinalValue(Top, L, IV, StepInst);
     // Update the stream info.
     auto IVSPtr = IVS.get();
     IVs.insert({IV, IVSPtr});
@@ -258,7 +259,7 @@ private:
 
   /// Returns the final value of the loop induction variable if found.
   static Optional<InductionVariableStream::FinalValue>
-  findFinalValue(Loop *L, PHINode *IV, Value *StepInst) {
+  findFinalValue(Loop *Top, Loop *L, PHINode *IV, Value *StepInst) {
     auto LatchCmpInst = L->getLatchCmpInst();
     if (!LatchCmpInst)
       return None;
@@ -273,7 +274,7 @@ private:
     if (!V)
       return None;
 
-    return InductionVariableStream::FinalValue{V, L->isLoopInvariant(V),
+    return InductionVariableStream::FinalValue{V, Top->isLoopInvariant(V),
                                                LatchCmpInst->getPredicate()};
   }
 
