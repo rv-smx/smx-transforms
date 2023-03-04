@@ -1,6 +1,7 @@
 #include "llvm/Passes/PassPlugin.h"
 
 #include "LoopProfiler.h"
+#include "LoopStreamization.h"
 #include "LoopTreePrinter.h"
 #include "SMXPass.h"
 #include "StreamMemoryAnalysis.h"
@@ -14,6 +15,7 @@ PassPluginLibraryInfo getSMXTransformsPluginInfo() {
             registerStreamMemoryAnalysis(PB);
             registerLoopProfiler(PB);
             registerLoopTreePrinter(PB);
+            registerLoopStreamization(PB);
           }};
 }
 
