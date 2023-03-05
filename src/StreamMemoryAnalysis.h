@@ -31,8 +31,8 @@ struct InductionVariableStream {
     void print(llvm::raw_ostream &OS) const;
   };
 
-  /// Name.
-  llvm::StringRef Name;
+  /// PHI corresponding to this memory stream.
+  llvm::PHINode *PHI;
   /// The parent induction variable stream,
   /// `nullptr` if this is the outermost induction variable.
   InductionVariableStream *Parent;
@@ -80,16 +80,14 @@ struct MemoryStream {
     llvm::SmallVector<Stride, 1> Strides;
     /// Is loop invariant.
     bool IsInvariant;
-    /// `true` if (- factor), otherwise (+ stride).
+    /// `true` if (- factor), otherwise (+ factor).
     bool IsNeg;
 
     void print(llvm::raw_ostream &OS) const;
   };
 
-  /// Name.
-  llvm::StringRef Name;
-  /// Result type.
-  llvm::Type *ResultType;
+  /// GEP corresponding to this memory stream.
+  llvm::GetElementPtrInst *GEP;
   /// Address factors.
   llvm::SmallVector<AddressFactor, 4> Factors;
   /// Has been read.

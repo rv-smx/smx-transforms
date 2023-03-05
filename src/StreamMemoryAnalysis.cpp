@@ -91,7 +91,6 @@ private:
       return nullptr;
     // Fill the induction variable stream info.
     auto IVS = std::make_unique<InductionVariableStream>();
-    IVS->Name = IV->getName();
     IVS->Parent = Parent;
     IVS->Loop = L;
     IVS->IsCanonical = L->isCanonical(SE);
@@ -120,9 +119,8 @@ private:
     }
     // Create a new memory stream.
     auto MS = std::make_unique<MemoryStream>();
-    MS->Name = GEP->getName();
-    MS->ResultType = GEP->getResultElementType();
-    MS->Width = DL.getTypeAllocSize(MS->ResultType).getFixedSize();
+    MS->GEP = GEP;
+    MS->Width = DL.getTypeAllocSize(GEP->getResultElementType()).getFixedSize();
     GEPs.insert({GEP, MS.get()});
     // Initialize factors.
     auto ElemTy = GEP->getSourceElementType();
@@ -392,10 +390,10 @@ void InductionVariableStream::FinalValue::print(raw_ostream &OS) const {
 
 void InductionVariableStream::print(raw_ostream &OS) const {
   OS << "{\"name\":";
-  printString(OS, Name);
+  printString(OS, PHI->getName());
   OS << ",\"parent\":";
   if (Parent) {
-    printString(OS, Parent->Name);
+    printString(OS, Parent->PHI->getName());
   } else {
     OS << "null";
   }
@@ -473,9 +471,9 @@ void MemoryStream::AddressFactor::print(raw_ostream &OS) const {
 
 void MemoryStream::print(raw_ostream &OS) const {
   OS << "{\"name\":";
-  printString(OS, Name);
+  printString(OS, GEP->getName());
   OS << ",\"resultType\":";
-  printPrintable(OS, *ResultType);
+  printPrintable(OS, *GEP->getResultElementType());
   OS << ",\"factors\":";
   printArray(OS, ArrayRef<AddressFactor>(Factors));
   OS << ",\"read\":";
