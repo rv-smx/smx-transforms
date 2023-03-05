@@ -91,6 +91,7 @@ private:
       return nullptr;
     // Fill the induction variable stream info.
     auto IVS = std::make_unique<InductionVariableStream>();
+    IVS->PHI = IV;
     IVS->Parent = Parent;
     IVS->Loop = L;
     IVS->IsCanonical = L->isCanonical(SE);
