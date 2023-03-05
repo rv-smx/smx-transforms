@@ -448,10 +448,10 @@ void MemoryStream::AddressFactor::print(raw_ostream &OS) const {
   StringRef DepStreamKindStr;
   OS << "{\"depStream\":";
   if (auto IV = std::get_if<InductionVariableStream *>(&DepStream)) {
-    printString(OS, (*IV)->Name);
+    printString(OS, (*IV)->PHI->getName());
     DepStreamKindStr = "inductionVariable";
   } else if (auto MS = std::get_if<MemoryStream *>(&DepStream)) {
-    printString(OS, (*MS)->Name);
+    printString(OS, (*MS)->GEP->getName());
     DepStreamKindStr = "memory";
   } else {
     auto V = std::get_if<Value *>(&DepStream);
@@ -488,7 +488,7 @@ void MemoryOperation::print(raw_ostream &OS) const {
   printString(OS, Instruction::getOpcodeName(MemOpc));
   OS << ",\"memStream\":";
   if (MemStream) {
-    printString(OS, MemStream->Name);
+    printString(OS, MemStream->GEP->getName());
   } else {
     OS << "null";
   }
