@@ -96,7 +96,7 @@ bool shouldBeStreamized(const MDNode *LoopID) {
 
 /// Emits a warning message for the given loop.
 raw_ostream &emitWarning(const Loop *L) {
-  errs() << "LoopStreamization WARNING: loop: ";
+  errs() << "\033[1m\033[33mLoopStreamization WARNING\033[0m: loop: ";
   L->getStartLoc().print(errs());
   errs() << ": ";
   return errs();
@@ -505,7 +505,8 @@ private:
       bool IsSigned = CmpInst::isSigned(IV->FinalVal->Cond);
 
       auto Init = castToSizeTy(Builder, IV->InitVal, IsSigned);
-      auto Step = Exp.expandCodeFor(IV->StepVal, SizeTy);
+      auto Step = Exp.expandCodeFor(IV->StepVal);
+      Step = castToSizeTy(Builder, Step, IsSigned);
       auto Final = castToSizeTy(Builder, IV->FinalVal->Value, IsSigned);
       auto Cond = getSizeTyInt(predToStopCond(IV->FinalVal->Cond));
 
@@ -704,10 +705,13 @@ private:
           Intrinsic::getDeclaration(F.getParent(), Intrinsic::riscv_smx_step,
                                     {SizeTy}),
           {getSizeTyInt(Idx)});
+      // FIXME: Remove this unnecessary truncate
+      //        if more overload of `smx_step` is available.
+      auto TruncStep = Builder.CreateTrunc(Step, IV->PHI->getType());
 
       // Update the step value in the PHI node.
       auto OldStep = IV->PHI->getIncomingValueForBlock(Latch);
-      OldStep->replaceAllUsesWith(Step);
+      OldStep->replaceAllUsesWith(TruncStep);
 
       // Check if the terminator is a conditional branch.
       auto Br = dyn_cast<BranchInst>(Term);
