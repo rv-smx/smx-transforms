@@ -102,22 +102,6 @@ raw_ostream &emitWarning(const Loop *L) {
   return errs();
 }
 
-/// Gets the first non-PHI and non-landing-pad instruction
-/// of the given basic block.
-Instruction *getFirstInst(BasicBlock &BB) {
-  if (auto LandingPad = BB.getLandingPadInst()) {
-    return LandingPad->getNextNode();
-  } else {
-    return BB.getFirstNonPHI();
-  }
-}
-
-/// Gets a IR builder with insert point set to the beginning of the basic block
-/// (skips PHIs and landing pads).
-IRBuilder<> getBBBuilder(BasicBlock &BB) {
-  return IRBuilder<>(getFirstInst(BB));
-}
-
 /// Converts LLVM comparison instruction predicate to SMX stop condition.
 unsigned predToStopCond(CmpInst::Predicate Pred) {
   switch (Pred) {
@@ -509,13 +493,13 @@ private:
   /// to the given block.
   void insertStreamConfigs(const Loop *L, BasicBlock &BB, const IVVec &IVs,
                            const MSVec &MSs) {
-    auto Builder = getBBBuilder(BB);
+    IRBuilder<> Builder(BB.getTerminator());
     DenseMap<const void *, unsigned> IDs;
     unsigned LastID = 0;
 
     // Insert induction variable stream configs.
     SCEVExpander Exp(SE, SE.getDataLayout(), "smx.streamize");
-    Exp.setInsertPoint(getFirstInst(BB));
+    Exp.setInsertPoint(BB.getTerminator());
     for (const auto &IV : IVs) {
       // FIXME: This is tricky and unreliable.
       bool IsSigned = CmpInst::isSigned(IV->FinalVal->Cond);
@@ -542,6 +526,7 @@ private:
       getMemoryStreamInfoForConfig(L, Builder, MS, Base, AFs);
 
       // Insert memory stream config.
+      auto BasePtr = Builder.CreateIntToPtr(Base, Builder.getPtrTy());
       assert(!AFs.empty() && "No address factor in memory stream!");
       const auto &FirstAF = AFs.front();
       auto Dep = getSizeTyInt(IDs.find(FirstAF.DepStream)->second);
@@ -551,7 +536,7 @@ private:
       Builder.CreateCall(Intrinsic::getDeclaration(F.getParent(),
                                                    Intrinsic::riscv_smx_cfg_ms,
                                                    {SizeTy}),
-                         {Base, FirstAF.Stride, Dep, Kind, Prefetch, Width});
+                         {BasePtr, FirstAF.Stride, Dep, Kind, Prefetch, Width});
 
       // Insert the rest address factor configs.
       for (unsigned Idx = 1; Idx < AFs.size(); Idx += 2) {
@@ -625,7 +610,7 @@ private:
         // Update base address.
         reduceAndUpdate(
             Builder, Base,
-            reduceStrides(Builder, Init,
+            reduceStrides(Builder, castToSizeTy(Builder, Init, false),
                           ArrayRef<MemoryStream::Stride>(Factor.Strides)),
             Factor.IsNeg);
       } else {
@@ -736,11 +721,14 @@ private:
           {getSizeTyInt(Idx)});
 
       // Update the terminator of the latch block.
+      auto OldCmp = Br->getCondition();
       if (Br->getSuccessor(0) == IV->Loop->getHeader()) {
         Br->setCondition(Builder.CreateICmpNE(Step, Stop));
       } else {
         Br->setCondition(Builder.CreateICmpEQ(Step, Stop));
       }
+      if (auto I = dyn_cast<Instruction>(OldCmp))
+        I->eraseFromParent();
     }
   }
 
@@ -773,7 +761,13 @@ private:
 
   /// Inserts stream end intrinsics to the given block.
   void insertStreamEnd(BasicBlock &BB) {
-    getBBBuilder(BB).CreateCall(
+    Instruction *IP;
+    if (auto LandingPad = BB.getLandingPadInst()) {
+      IP = LandingPad->getNextNode();
+    } else {
+      IP = BB.getFirstNonPHI();
+    }
+    IRBuilder<>(IP).CreateCall(
         Intrinsic::getDeclaration(F.getParent(), Intrinsic::riscv_smx_end));
   }
 
