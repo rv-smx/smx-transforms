@@ -16,6 +16,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 
@@ -533,7 +534,7 @@ private:
       auto Dep = getSizeTyInt(IDs.find(FirstAF.DepStream)->second);
       auto Kind = getSizeTyInt(FirstAF.IsMS);
       auto Prefetch = getSizeTyInt(MS->Read);
-      auto Width = getSizeTyInt(MS->Width);
+      auto Width = getSizeTyInt(Log2_32_Ceil(MS->Width));
       Builder.CreateCall(Intrinsic::getDeclaration(F.getParent(),
                                                    Intrinsic::riscv_smx_cfg_ms,
                                                    {SizeTy}),
