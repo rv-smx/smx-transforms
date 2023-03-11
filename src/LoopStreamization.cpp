@@ -533,7 +533,8 @@ private:
       const auto &FirstAF = AFs.front();
       auto Dep = getSizeTyInt(IDs.find(FirstAF.DepStream)->second);
       auto Kind = getSizeTyInt(FirstAF.IsMS);
-      auto Prefetch = getSizeTyInt(MS->Read);
+      assert((MS->Read || MS->Written) && "Memory stream does not access memory!");
+      auto Prefetch = getSizeTyInt(1);
       auto Width = getSizeTyInt(Log2_32_Ceil(MS->Width));
       Builder.CreateCall(Intrinsic::getDeclaration(F.getParent(),
                                                    Intrinsic::riscv_smx_cfg_ms,
