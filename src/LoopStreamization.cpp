@@ -75,6 +75,11 @@ cl::opt<bool> NoIndirect("smx-no-indirect",
                          cl::desc("Disable indirect memory stream access."),
                          cl::init(false));
 
+cl::opt<bool>
+    ConfigOnly("smx-config-only",
+               cl::desc("Only insert configurations, do not enable DAE."),
+               cl::init(false));
+
 /// Checks if the given loop ID said the loop should be streamized.
 bool shouldBeStreamized(const MDNode *LoopID) {
   assert(LoopID->getNumOperands() > 0 && "requires at least one operand");
@@ -206,8 +211,10 @@ public:
     auto Preheader = Outermost->getLoopPreheader();
     assert(Preheader && "The outermost loop has no preheader!");
     insertStreamConfigs(Outermost, *Preheader, IVs, MSs);
-    replaceIndvarUpdates(IVs);
-    replaceMemoryAccesses(MSs);
+    if (!ConfigOnly) {
+      replaceIndvarUpdates(IVs);
+      replaceMemoryAccesses(MSs);
+    }
     SmallVector<BasicBlock *, 8> ExitBlocks;
     Outermost->getExitBlocks(ExitBlocks);
     for (const auto &BB : ExitBlocks)
