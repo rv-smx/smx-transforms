@@ -80,6 +80,11 @@ cl::opt<bool>
                cl::desc("Only insert configurations, do not enable DAE."),
                cl::init(false));
 
+cl::opt<bool> AllowNoMemoryStreams(
+    "smx-allow-no-mss",
+    cl::desc("Allow that there are no memory streams in loop."),
+    cl::init(false));
+
 /// Checks if the given loop ID said the loop should be streamized.
 bool shouldBeStreamized(const MDNode *LoopID) {
   assert(LoopID->getNumOperands() > 0 && "requires at least one operand");
@@ -203,8 +208,11 @@ public:
       emitWarning(L) << "Can not streamize this loop!\n";
       return false;
     }
-    if (MSs.empty())
+    if (MSs.empty()) {
       emitWarning(L) << "No valid memory streams detected!\n";
+      if (!AllowNoMemoryStreams)
+        return false;
+    }
 
     // Perform streamization.
     auto Outermost = Loops.front();
