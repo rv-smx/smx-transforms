@@ -511,7 +511,7 @@ private:
                            const MSVec &MSs) {
     IRBuilder<> Builder(BB.getTerminator());
     DenseMap<const void *, unsigned> IDs;
-    unsigned LastID = 0;
+    unsigned LastID = 0, ConfigNum = 0;
 
     // Insert induction variable stream configs.
     SCEVExpander Exp(SE, SE.getDataLayout(), "smx.streamize");
@@ -530,6 +530,7 @@ private:
                                                    Intrinsic::riscv_smx_cfg_iv,
                                                    {SizeTy}),
                          {Init, Step, Final, Cond});
+      ++ConfigNum;
 
       // Update ID.
       IDs.insert({IV, LastID++});
@@ -555,6 +556,7 @@ private:
                                                    Intrinsic::riscv_smx_cfg_ms,
                                                    {SizeTy}),
                          {BasePtr, FirstAF.Stride, Dep, Kind, Prefetch, Width});
+      ++ConfigNum;
 
       // Insert the rest address factor configs.
       for (unsigned Idx = 1; Idx < AFs.size(); Idx += 2) {
@@ -578,6 +580,7 @@ private:
             Intrinsic::getDeclaration(F.getParent(),
                                       Intrinsic::riscv_smx_cfg_addr, {SizeTy}),
             {AF.Stride, Dep1, Kind1, Stride2, Dep2, Kind2});
+        ++ConfigNum;
       }
 
       // Update ID.
@@ -585,8 +588,9 @@ private:
     }
 
     // Insert ready.
-    Builder.CreateCall(
-        Intrinsic::getDeclaration(F.getParent(), Intrinsic::riscv_smx_ready));
+    Builder.CreateCall(Intrinsic::getDeclaration(
+                           F.getParent(), Intrinsic::riscv_smx_ready, {SizeTy}),
+                       {getSizeTyInt(ConfigNum)});
   }
 
   /// Gets necessary information for inserting memory stream configs.
