@@ -265,12 +265,12 @@ private:
         for (const auto &Sub : Subs) {
           if (Hints.contains(Sub)) {
             if (NextLoop)
-              return {};
+              return Path;
             NextLoop = Sub;
           }
         }
         if (!NextLoop)
-          return {};
+          return Path;
       }
 
       Path.push_back(NextLoop);
