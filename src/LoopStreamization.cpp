@@ -557,7 +557,8 @@ private:
       const auto &FirstAF = AFs.front();
       auto Dep = getSizeTyInt(IDs.find(FirstAF.DepStream)->second);
       auto Kind = getSizeTyInt(FirstAF.IsMS);
-      assert((MS->Read || MS->Written) && "Memory stream does not access memory!");
+      assert((MS->Read || MS->Written) &&
+             "Memory stream does not access memory!");
       auto Prefetch = getSizeTyInt(1);
       auto Width = getSizeTyInt(Log2_32_Ceil(MS->Width));
       Builder.CreateCall(Intrinsic::getDeclaration(F.getParent(),
@@ -768,13 +769,11 @@ private:
   /// Replaces all related memory accesses with stream accesses.
   void replaceMemoryAccesses(const MSVec &MSs) {
     for (unsigned Idx = 0; Idx < MSs.size(); ++Idx) {
-      const auto &MS = MSs[Idx];
-      auto Ty = MS->GEP->getResultElementType();
-
-      for (const auto &Use : MS->GEP->uses()) {
+      for (const auto &Use : MSs[Idx]->GEP->uses()) {
         if (auto Load = dyn_cast<LoadInst>(Use.getUser())) {
           // Replace with a load intrinsic.
           IRBuilder<> Builder(Load);
+          auto Ty = Load->getType();
           Load->replaceAllUsesWith(Builder.CreateCall(
               Intrinsic::getDeclaration(
                   F.getParent(), Intrinsic::riscv_smx_load, {Ty, SizeTy}),
@@ -782,6 +781,7 @@ private:
         } else if (auto Store = dyn_cast<StoreInst>(Use.getUser())) {
           // Replace with a store intrinsic.
           IRBuilder<> Builder(Store);
+          auto Ty = Store->getValueOperand()->getType();
           Builder.CreateCall(
               Intrinsic::getDeclaration(
                   F.getParent(), Intrinsic::riscv_smx_store, {SizeTy, Ty}),
