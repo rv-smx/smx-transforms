@@ -56,6 +56,11 @@ cl::opt<unsigned> MaxIndvarStreams(
     cl::desc("Maximum number of supported induction variable streams."),
     cl::init(4));
 
+cl::opt<bool>
+    TruncateMems("smx-trunc-mems",
+                 cl::desc("Truncate if there are too many memory streams."),
+                 cl::init(false));
+
 cl::opt<unsigned>
     MaxMemoryStreams("smx-max-mss",
                      cl::desc("Maximum number of supported memory streams."),
@@ -355,8 +360,11 @@ private:
       sortMemoryStreams(Outermost, MSs);
 
     // Must not more than `max-mss`.
-    if (MSs.size() > MaxMemoryStreams.getValue())
-      return false;
+    if (MSs.size() > MaxMemoryStreams.getValue()) {
+      if (!TruncateMems)
+        return false;
+      MSs.resize(MaxMemoryStreams.getValue());
+    }
 
     // All done.
     return true;
