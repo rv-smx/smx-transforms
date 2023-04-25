@@ -511,6 +511,10 @@ private:
     for (const auto &[_, D] : InDeg) {
       assert(!D && "Cycle detected in memory stream dependency graph!");
     }
+
+    // Reverse the memory stream list
+    // due to the `InDeg` is actually out degrees.
+    std::reverse(MSs.begin(), MSs.end());
   }
 
   /// Inserts stream configuration intrinsics (include `ready`)
