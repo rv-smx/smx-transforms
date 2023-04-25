@@ -833,7 +833,7 @@ PreservedAnalyses LoopStreamization::run(Function &F,
   // Find all loops that are marked as `streamize`.
   SmallSet<const Loop *, 4> HintedLoops;
   for (const auto &Loop : LI) {
-    if (shouldBeStreamized(Loop->getLoopID()))
+    if (auto LoopID = Loop->getLoopID(); LoopID && shouldBeStreamized(LoopID))
       HintedLoops.insert(Loop);
   }
 
