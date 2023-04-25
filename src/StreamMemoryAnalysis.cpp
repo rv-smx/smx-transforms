@@ -121,6 +121,7 @@ private:
     // Create a new memory stream.
     auto MS = std::make_unique<MemoryStream>();
     MS->GEP = GEP;
+    // FIXME: Width may unreliable due to opaque pointer.
     MS->Width = DL.getTypeAllocSize(GEP->getResultElementType()).getFixedSize();
     GEPs.insert({GEP, MS.get()});
     // Initialize factors.

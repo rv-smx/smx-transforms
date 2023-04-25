@@ -626,6 +626,7 @@ private:
         }
       } else if (auto MS = std::get_if<MemoryStream *>(&Dep)) {
         if (L->isLoopInvariant((*MS)->GEP)) {
+          // FIXME: Load, not GEP, and how to determine the load type?
           Init = (*MS)->GEP;
         } else {
           DepStream = *MS;
