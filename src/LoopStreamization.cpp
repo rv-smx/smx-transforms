@@ -799,14 +799,24 @@ private:
 
   /// Inserts stream end intrinsics to the given block.
   void insertStreamEnd(BasicBlock &BB) {
+    // Get the insert point.
     Instruction *IP;
     if (auto LandingPad = BB.getLandingPadInst()) {
       IP = LandingPad->getNextNode();
     } else {
       IP = BB.getFirstNonPHI();
     }
-    IRBuilder<>(IP).CreateCall(
-        Intrinsic::getDeclaration(F.getParent(), Intrinsic::riscv_smx_end));
+    // Get the declaration of `riscv_smx_end`
+    auto End =
+        Intrinsic::getDeclaration(F.getParent(), Intrinsic::riscv_smx_end);
+    // Check if the insert point is a call to `riscv_smx_end`.
+    if (auto Call = dyn_cast<CallInst>(IP);
+        Call && Call->getCalledFunction() == End) {
+      // Do not insert too many calls.
+      return;
+    }
+    // Insert call.
+    IRBuilder<>(IP).CreateCall(End);
   }
 
   /// Casts the given integer/pointer to a value of type `size_t`.
