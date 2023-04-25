@@ -726,6 +726,7 @@ private:
 
   /// Replaces all related induction variable update with stream steps.
   void replaceIndvarUpdates(const IVVec &IVs) {
+    IRBuilder<> Builder(F.getContext());
     for (unsigned Idx = 0; Idx < IVs.size(); ++Idx) {
       const auto &IV = IVs[Idx];
 
@@ -734,8 +735,15 @@ private:
       assert(Latch && "Invalid loop latch!");
       auto Term = Latch->getTerminator();
 
+      // Set insert point.
+      auto OldStep = IV->PHI->getIncomingValueForBlock(Latch);
+      if (auto I = dyn_cast<Instruction>(OldStep)) {
+        Builder.SetInsertPoint(I);
+      } else {
+        Builder.SetInsertPoint(Term);
+      }
+
       // Insert step intrinsic.
-      IRBuilder<> Builder(Term);
       auto Step = Builder.CreateCall(
           Intrinsic::getDeclaration(F.getParent(), Intrinsic::riscv_smx_step,
                                     {SizeTy}),
@@ -745,7 +753,6 @@ private:
       auto TruncStep = Builder.CreateTrunc(Step, IV->PHI->getType());
 
       // Update the step value in the PHI node.
-      auto OldStep = IV->PHI->getIncomingValueForBlock(Latch);
       OldStep->replaceAllUsesWith(TruncStep);
 
       // Check if the terminator is a conditional branch.
@@ -754,6 +761,7 @@ private:
         continue;
 
       // Insert stop value intrinsic.
+      Builder.SetInsertPoint(Term);
       auto Stop = Builder.CreateCall(
           Intrinsic::getDeclaration(F.getParent(),
                                     Intrinsic::riscv_smx_stop_val, {SizeTy}),
