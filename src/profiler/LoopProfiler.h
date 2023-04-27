@@ -10,6 +10,4 @@ struct LoopProfiler : public llvm::PassInfoMixin<LoopProfiler> {
                               llvm::ModuleAnalysisManager &MAM) const;
 };
 
-void registerLoopProfiler(llvm::PassBuilder &PB);
-
 #endif // SMX_TRANSFORMS_LOOP_PROFILER_H

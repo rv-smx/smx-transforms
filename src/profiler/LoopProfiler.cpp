@@ -11,6 +11,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -114,14 +115,21 @@ PreservedAnalyses LoopProfiler::run(Module &M,
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 
-void registerLoopProfiler(PassBuilder &PB) {
-  PB.registerPipelineParsingCallback(
-      [](StringRef Name, ModulePassManager &MPM,
-         ArrayRef<PassBuilder::PipelineElement>) {
-        if (Name == "loop-profiler") {
-          MPM.addPass(LoopProfiler());
-          return true;
-        }
-        return false;
-      });
+PassPluginLibraryInfo getLoopProfilerPluginInfo() {
+  return {LLVM_PLUGIN_API_VERSION, "LoopProfiler", LLVM_VERSION_STRING,
+          [](PassBuilder &PB) {
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, ModulePassManager &MPM,
+                   ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == "loop-profiler") {
+                    MPM.addPass(LoopProfiler());
+                    return true;
+                  }
+                  return false;
+                });
+          }};
+}
+
+extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
+  return getLoopProfilerPluginInfo();
 }
