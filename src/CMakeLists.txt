@@ -1,8 +1,5 @@
-add_library(SMXTransforms MODULE
-  LoopProfiler.cpp
-  LoopStreamization.cpp
-  LoopTreePrinter.cpp
-  PassRegistry.cpp
-  StreamMemoryAnalysis.cpp
-  Utils.cpp
-)
+add_subdirectory(profiler)
+
+if(NOT NO_SMX)
+  add_subdirectory(smx)
+endif()
