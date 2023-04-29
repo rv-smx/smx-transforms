@@ -750,7 +750,13 @@ private:
           {getSizeTyInt(Idx)});
       // FIXME: Remove this unnecessary truncate
       //        if more overload of `smx_step` is available.
-      auto TruncStep = Builder.CreateTrunc(Step, IV->PHI->getType());
+      Value *TruncStep;
+      auto Ty = IV->PHI->getType();
+      if (Ty->isPointerTy()) {
+        TruncStep = Builder.CreateIntToPtr(Step, Ty);
+      } else {
+        TruncStep = Builder.CreateTrunc(Step, Ty);
+      }
 
       // Update the step value in the PHI node.
       OldStep->replaceAllUsesWith(TruncStep);
